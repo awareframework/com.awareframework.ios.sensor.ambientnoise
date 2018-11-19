@@ -1,0 +1,11 @@
+use_frameworks!
+
+target 'com.awareframework.ios.sensor.ambientnoise_Example' do
+  pod 'com.awareframework.ios.sensor.ambientnoise', :path => '../'
+
+  target 'com.awareframework.ios.sensor.ambientnoise_Tests' do
+    inherit! :search_paths
+
+    
+  end
+end
