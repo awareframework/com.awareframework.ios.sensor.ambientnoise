@@ -1,5 +1,5 @@
 import XCTest
-import com.awareframework.ios.sensor.ambientnoise
+import com_awareframework_ios_sensor_ambientnoise
 
 class Tests: XCTestCase {
     
