@@ -17,4 +17,13 @@ public class AmbientNoiseData: AwareObject {
     @objc dynamic public var soundRMS:Double = 0
     @objc dynamic public var isSilent:Bool = true
     
+    
+    public override func toDictionary() -> Dictionary<String, Any> {
+        var dict = super.toDictionary()
+        dict["soundFrequency"] = soundFrequency
+        dict["soundDecibels"] = soundDecibels
+        dict["soundRMS"] = soundRMS
+        dict["isSilent"] = isSilent
+        return dict;
+    }
 }
