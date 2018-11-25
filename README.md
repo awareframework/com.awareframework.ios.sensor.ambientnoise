@@ -40,10 +40,9 @@ Class to hold the configuration of the sensor.
 
 #### Fields
 + `sensorObserver: AmbientNoiseObserver`: Callback for live data updates.
-+ `interval: Int`: Sampling interval by minute. (default = 5) 
++ `interval: Int`: Sampling interval in minute. (default = 5) 
 + `samples: Int` : Data samples to collect per minute. (default = 30)
 + `silenceThreshold: Double`: A threshold of RMS for determining silence or not. (default = 50)
-+ `interval: Int`: Data samples to collect per second (Hz). (default = 5)
 + `enabled: Boolean` Sensor is enabled or not. (default = `false`)
 + `debug: Boolean` enable/disable logging to Xcode console. (default = `false`)
 + `label: String` Label for the data. (default = "")
