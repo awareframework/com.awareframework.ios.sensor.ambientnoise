@@ -12,17 +12,17 @@ public class AmbientNoiseData: AwareObject {
 
     public static let TABLE_NAME = "ambientNoiseTable"
     
-    @objc dynamic public var soundFrequency:Double = 0
-    @objc dynamic public var soundDecibels:Double  = 0
-    @objc dynamic public var soundRMS:Double = 0
+    @objc dynamic public var frequency:Double = 0
+    @objc dynamic public var decibels:Double  = 0
+    @objc dynamic public var rms:Double = 0
     @objc dynamic public var isSilent:Bool = true
     
     
     public override func toDictionary() -> Dictionary<String, Any> {
         var dict = super.toDictionary()
-        dict["soundFrequency"] = soundFrequency
-        dict["soundDecibels"] = soundDecibels
-        dict["soundRMS"] = soundRMS
+        dict["frequency"] = frequency
+        dict["decibels"] = decibels
+        dict["rms"] = rms
         dict["isSilent"] = isSilent
         return dict;
     }

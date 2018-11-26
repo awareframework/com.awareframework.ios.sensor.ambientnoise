@@ -8,11 +8,19 @@
 
 import UIKit
 
-class ViewController: UIViewController {
+import com_awareframework_ios_sensor_ambientnoise
 
+class ViewController: UIViewController {
+    var sensor: AmbientNoiseSensor? = nil
+    
     override func viewDidLoad() {
         super.viewDidLoad()
         // Do any additional setup after loading the view, typically from a nib.
+        
+        sensor = AmbientNoiseSensor.init(AmbientNoiseSensor.Config().apply{ config in
+            config.debug = true
+        })
+        sensor?.start()
     }
 
     override func didReceiveMemoryWarning() {

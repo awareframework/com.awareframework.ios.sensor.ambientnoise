@@ -18,6 +18,25 @@ class Tests: XCTestCase {
         XCTAssert(true, "Pass")
     }
     
+    func testConfig(){
+        // Sampling interval in minute. (default = 5)
+        let interval:Int            = 10;
+        // samples: Int : Data samples to collect per minute. (default = 30)
+        let samples:Int             = 60;
+        // silenceThreshold: Double: A threshold of RMS for determining silence or not. (default = 50)
+        let silenceThreshold:Double = 80.0;
+        
+        var sensor = AmbientNoiseSensor.init(AmbientNoiseSensor.Config.init())
+        XCTAssertEqual(5, sensor.CONFIG.interval)
+        XCTAssertEqual(30, sensor.CONFIG.samples)
+        XCTAssertEqual(50.0, sensor.CONFIG.silenceThreshold)
+        
+        sensor = AmbientNoiseSensor.init(AmbientNoiseSensor.Config.init(["interval": interval, "samples":samples, "silenceThreshold": silenceThreshold]))
+        XCTAssertEqual(interval, sensor.CONFIG.interval)
+        XCTAssertEqual(samples, sensor.CONFIG.samples)
+        XCTAssertEqual(silenceThreshold, sensor.CONFIG.silenceThreshold)
+    }
+    
     func testPerformanceExample() {
         // This is an example of a performance test case.
         self.measure() {

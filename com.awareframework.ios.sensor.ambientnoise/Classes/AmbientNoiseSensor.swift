@@ -6,7 +6,6 @@
 //
 
 import UIKit
-import SwiftyJSON
 import com_awareframework_ios_sensor_core
 
 public class AmbientNoiseSensor: AwareSensor {
@@ -14,9 +13,15 @@ public class AmbientNoiseSensor: AwareSensor {
     public var CONFIG = Config()
     
     public class Config:SensorConfig {
-        public var frequencyMin = 5;
-        public var sampleSize   = 30;
-        public var silenceThreshold = 50;
+        // Sampling interval in minute. (default = 5)
+        public var interval:Int            = 5;
+        
+        // samples: Int : Data samples to collect per minute. (default = 30)
+        public var samples:Int             = 30;
+        
+        // silenceThreshold: Double: A threshold of RMS for determining silence or not. (default = 50)
+        public var silenceThreshold:Double = 50.0;
+        
         public var sensorObserver:AmbientNoiseObserver?
         
         public override init() {
@@ -24,8 +29,20 @@ public class AmbientNoiseSensor: AwareSensor {
             dbPath = "aware_ambientnoise"
         }
         
-        public convenience init(_ json:JSON){
+        public convenience init(_ config:Dictionary<String, Any>){
             self.init()
+            if let interval = config["interval"] as? Int {
+                self.interval = interval
+            }
+            
+            if let samples = config["samples"] as? Int {
+                self.samples = samples
+            }
+
+            if let silenceThreshold = config["silenceThreshold"] as? Double {
+                self.silenceThreshold = silenceThreshold
+            }
+            
         }
         
         public func apply(closure:(_ config: AmbientNoiseSensor.Config) -> Void) -> Self {
@@ -49,8 +66,8 @@ public class AmbientNoiseSensor: AwareSensor {
             self.ambientNoiseMonitor = ANMonitor()
             if let monitor = self.ambientNoiseMonitor {
                 // analyzer.delegate = self
-                monitor.frequencyMin = Int32(self.CONFIG.frequencyMin)
-                monitor.sampleSize = Int32(self.CONFIG.sampleSize)
+                monitor.frequencyMin = Int32(self.CONFIG.interval)
+                monitor.sampleSize = Int32(self.CONFIG.samples)
                 monitor.silenceThreshold = Int32(self.CONFIG.silenceThreshold)
                 monitor.setANMonitorOutputHadler { (mf, db, rms, rawData, url, audioId) in
                     // callback
@@ -58,10 +75,10 @@ public class AmbientNoiseSensor: AwareSensor {
                         print("[\(audioId)] MaxFrequency:\(mf), Decobel:\(db), RMS:\(rms)")
                     }
                     let data = AmbientNoiseData()
-                    data.soundDecibels = db
-                    data.soundRMS = rms
-                    data.soundFrequency = Double(mf)
-                    if Int(rms) > self.CONFIG.silenceThreshold {
+                    data.decibels = db
+                    data.rms = rms
+                    data.frequency = Double(mf)
+                    if rms > self.CONFIG.silenceThreshold {
                         data.isSilent = false
                     }
                     if let engine = self.dbEngine {
