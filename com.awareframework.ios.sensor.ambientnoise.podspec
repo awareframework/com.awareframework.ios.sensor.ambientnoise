@@ -45,8 +45,5 @@ s.public_header_files = 'com.awareframework.ios.sensor.ambientnoise/Classes/**/*
 # s.frameworks = 'UIKit', 'MapKit'
 # s.dependency 'AFNetworking', '~> 2.3'
 s.dependency 'com.awareframework.ios.sensor.core'
-# s.dependency 'AudioKit', '~> 4.0'
-# s.dependency 'EZAudio'
 
-# s.preserve_paths = 'com.aware.ios.sensor.ambientnoise/Classes/module.modulemap'
 end

@@ -1,4 +1,4 @@
-# Aware Ambient Noise
+# AWARE: Ambient Noise
 
 [![CI Status](https://img.shields.io/travis/awareframework/com.awareframework.ios.sensor.ambientnoise.svg?style=flat)](https://travis-ci.org/awareframework/com.awareframework.ios.sensor.ambientnoise)
 [![Version](https://img.shields.io/cocoapods/v/com.awareframework.ios.sensor.ambientnoise.svg?style=flat)](https://cocoapods.org/pods/com.awareframework.ios.sensor.ambientnoise)
