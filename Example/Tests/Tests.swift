@@ -26,14 +26,23 @@ class Tests: XCTestCase {
         // silenceThreshold: Double: A threshold of RMS for determining silence or not. (default = 50)
         let silenceThreshold:Double = 80.0;
         
+        // default
         var sensor = AmbientNoiseSensor.init(AmbientNoiseSensor.Config.init())
         XCTAssertEqual(5, sensor.CONFIG.interval)
         XCTAssertEqual(30, sensor.CONFIG.samples)
         XCTAssertEqual(50.0, sensor.CONFIG.silenceThreshold)
         
+        // inti with dictionary
         sensor = AmbientNoiseSensor.init(AmbientNoiseSensor.Config.init(["interval": interval, "samples":samples, "silenceThreshold": silenceThreshold]))
         XCTAssertEqual(interval, sensor.CONFIG.interval)
         XCTAssertEqual(samples, sensor.CONFIG.samples)
+        XCTAssertEqual(silenceThreshold, sensor.CONFIG.silenceThreshold)
+        
+        // set
+        sensor = AmbientNoiseSensor()
+        sensor.CONFIG.set(config: ["interval": interval, "samples":samples, "silenceThreshold": silenceThreshold])
+        XCTAssertEqual(interval, sensor.CONFIG.interval)
+        XCTAssertEqual(samples,  sensor.CONFIG.samples)
         XCTAssertEqual(silenceThreshold, sensor.CONFIG.silenceThreshold)
     }
     

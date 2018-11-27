@@ -29,8 +29,8 @@ public class AmbientNoiseSensor: AwareSensor {
             dbPath = "aware_ambientnoise"
         }
         
-        public convenience init(_ config:Dictionary<String, Any>){
-            self.init()
+        public override func set(config: Dictionary<String, Any>) {
+            super.set(config: config)
             if let interval = config["interval"] as? Int {
                 self.interval = interval
             }
@@ -38,11 +38,10 @@ public class AmbientNoiseSensor: AwareSensor {
             if let samples = config["samples"] as? Int {
                 self.samples = samples
             }
-
+            
             if let silenceThreshold = config["silenceThreshold"] as? Double {
                 self.silenceThreshold = silenceThreshold
             }
-            
         }
         
         public func apply(closure:(_ config: AmbientNoiseSensor.Config) -> Void) -> Self {

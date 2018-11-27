@@ -9,7 +9,7 @@
 Pod::Spec.new do |s|
 s.name             = 'com.awareframework.ios.sensor.ambientnoise'
   s.version       = '0.1.1'
-s.summary          = 'A short description of com.awareframework.ios.sensor.ambientnoise.'
+s.summary          = 'An Ambient Noise Sensor Module for AWARE Framework'
 
 # This description is used to generate tags and improve search results.
 #   * Think: What does it do? Why did you write it? What is the focus?
@@ -18,7 +18,7 @@ s.summary          = 'A short description of com.awareframework.ios.sensor.ambie
 #   * Finally, don't worry about the indent, CocoaPods strips it!
 
 s.description      = <<-DESC
-TODO: Add long description of the pod here.
+Ambient Noise sensor allows us to collect ambient noise information by each period using a phone's microphone. The data contains RMS, frequency (Hz), and decibels(dB). As an audio processing unit, this sensor uses [EZAudio](https://github.com/syedhali/EZAudio) which is an open-source audio sensing framework (MIT License).
 DESC
 
 s.homepage         = 'https://github.com/awareframework/com.awareframework.ios.sensor.ambientnoise'
@@ -44,6 +44,6 @@ s.source_files = 'com.awareframework.ios.sensor.ambientnoise/Classes/**/*'
 s.public_header_files = 'com.awareframework.ios.sensor.ambientnoise/Classes/**/*.h'
 # s.frameworks = 'UIKit', 'MapKit'
 # s.dependency 'AFNetworking', '~> 2.3'
-s.dependency 'com.awareframework.ios.sensor.core'
+s.dependency 'com.awareframework.ios.sensor.core', '~>0.3.1'
 
 end
