@@ -104,7 +104,7 @@ public class AmbientNoiseSensor: AwareSensor {
     
     public override func sync(force: Bool = false) {
         if let engine = self.dbEngine {
-            engine.startSync(AmbientNoiseData.TABLE_NAME, DbSyncConfig.init().apply{config in
+            engine.startSync(AmbientNoiseData.TABLE_NAME, AmbientNoiseData.self, DbSyncConfig.init().apply{config in
                 config.debug = self.CONFIG.debug
             })
             self.notificationCenter.post(name: .actionAwareAmbientNoiseSync, object: nil)
