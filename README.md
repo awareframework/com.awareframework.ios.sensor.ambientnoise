@@ -49,7 +49,7 @@ Class to hold the configuration of the sensor.
 + `deviceId: String` Id of the device that will be associated with the events and the sensor. (default = "")
 + `dbEncryptionKey` Encryption key for the database. (default = `null`)
 + `dbType: Engine` Which db engine to use for saving data. (default = `Engine.DatabaseType.NONE`)
-+ `dbPath: String` Path of the database. (default = "aware_gyroscope")
++ `dbPath: String` Path of the database. (default = "aware_ambientnoise")
 + `dbHost: String` Host for syncing the database. (default = `null`)
 
 ## Broadcasts
