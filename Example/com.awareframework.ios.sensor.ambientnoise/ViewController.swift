@@ -17,10 +17,11 @@ class ViewController: UIViewController {
         super.viewDidLoad()
         // Do any additional setup after loading the view, typically from a nib.
         
-        sensor = AmbientNoiseSensor.init(AmbientNoiseSensor.Config().apply{ config in
-            config.debug = true
-        })
-        sensor?.start()
+//        sensor = AmbientNoiseSensor.init(AmbientNoiseSensor.Config().apply{ config in
+//            config.debug = true
+//        })
+//        sensor?.start()
+        
     }
 
     override func didReceiveMemoryWarning() {
