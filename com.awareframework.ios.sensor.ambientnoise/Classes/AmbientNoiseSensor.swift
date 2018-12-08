@@ -14,10 +14,30 @@ public class AmbientNoiseSensor: AwareSensor {
     
     public class Config:SensorConfig {
         // Sampling interval in minute. (default = 5)
-        public var interval:Int            = 5;
+        public var interval:Int            = 5
+        {
+            didSet{
+                if self.interval < 1 {
+                    print("[AmbientNoise][Illegal Parameter]",
+                          "The 'interval' parameter has to be more than or equal to 0.",
+                          "This request ('\(self.interval)' is ignored.)")
+                    self.interval = oldValue
+                }
+            }
+        }
         
         // samples: Int : Data samples to collect per minute. (default = 30)
-        public var samples:Int             = 30;
+        public var samples:Int             = 30
+        {
+            didSet{
+                if self.samples < 1 {
+                    print("[AmbientNoise][Illegal Parameter]",
+                          "The 'samples' parameter has to be more than or equal to 0.",
+                          "This request ('\(self.samples)' is ignored.)")
+                    self.samples = oldValue
+                }
+            }
+        }
         
         // silenceThreshold: Double: A threshold of RMS for determining silence or not. (default = 50)
         public var silenceThreshold:Double = 50.0;
@@ -110,6 +130,13 @@ public class AmbientNoiseSensor: AwareSensor {
             self.notificationCenter.post(name: .actionAwareAmbientNoiseSync, object: nil)
         }
     }
+    
+    public func set(label:String){
+        self.CONFIG.label = label
+        self.notificationCenter.post(name: .actionAwareAmbientNoiseSetLabel,
+                                     object: nil,
+                                     userInfo: [AmbientNoiseSensor.EXTRA_LABEL: label])
+    }
 }
 
 public protocol AmbientNoiseObserver{
@@ -125,9 +152,10 @@ extension Notification.Name {
 }
 
 extension AmbientNoiseSensor{
-    public static let ACTION_AWARE_AMBIENTNOISE       = "ACTION_AWARE_AMBIENTNOISE"
-    public static let ACTION_AWARE_AMBIENTNOISE_START = "ACTION_AWARE_AMBIENTNOISESENSOR_START"
-    public static let ACTION_AWARE_AMBIENTNOISE_STOP  = "ACTION_AWARE_AMBIENTNOISESENSOR_STOP"
-    public static let ACTION_AWARE_AMBIENTNOISE_SET_LABEL = "ACTION_AWARE_AMBIENTNOISESET_LABEL"
-    public static let ACTION_AWARE_AMBIENTNOISE_SYNC  = "ACTION_AWARE_AMBIENTNOISESENSOR_SYNC"
+    public static let ACTION_AWARE_AMBIENTNOISE       = "com.awareframework.ios.sensor.ambientnoise"
+    public static let ACTION_AWARE_AMBIENTNOISE_START = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_START"
+    public static let ACTION_AWARE_AMBIENTNOISE_STOP  = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_STOP"
+    public static let ACTION_AWARE_AMBIENTNOISE_SET_LABEL = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESET_LABEL"
+    public static let EXTRA_LABEL = "label"
+    public static let ACTION_AWARE_AMBIENTNOISE_SYNC  = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_SYNC"
 }

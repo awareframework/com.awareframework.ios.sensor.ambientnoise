@@ -14,6 +14,62 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "B31119DCDFA05481FA8C71D55CDFF8D8"
+               BuildableName = "Pods_com_awareframework_ios_sensor_ambientnoise_Example.framework"
+               BlueprintName = "Pods-com.awareframework.ios.sensor.ambientnoise_Example"
+               ReferencedContainer = "container:Pods/Pods.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "50C3D0A74731EFC54D48EEB206CAC13A"
+               BuildableName = "Pods_com_awareframework_ios_sensor_ambientnoise_Tests.framework"
+               BlueprintName = "Pods-com.awareframework.ios.sensor.ambientnoise_Tests"
+               ReferencedContainer = "container:Pods/Pods.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "A9DB3EBFA864D039D059CE755A134179"
+               BuildableName = "com_awareframework_ios_sensor_ambientnoise.framework"
+               BlueprintName = "com.awareframework.ios.sensor.ambientnoise"
+               ReferencedContainer = "container:Pods/Pods.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C9C05654348CB1F648BF2ED778002217"
+               BuildableName = "com_awareframework_ios_sensor_core.framework"
+               BlueprintName = "com.awareframework.ios.sensor.core"
+               ReferencedContainer = "container:Pods/Pods.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "607FACCF1AFB9204008FA782"
                BuildableName = "com.awareframework.ios.sensor.ambientnoise_Example.app"
                BlueprintName = "com.awareframework.ios.sensor.ambientnoise_Example"
@@ -40,7 +96,18 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+      codeCoverageEnabled = "YES"
+      onlyGenerateCoverageForSpecifiedTargets = "YES"
       shouldUseLaunchSchemeArgsEnv = "YES">
+      <CodeCoverageTargets>
+         <BuildableReference
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "A9DB3EBFA864D039D059CE755A134179"
+            BuildableName = "com_awareframework_ios_sensor_ambientnoise.framework"
+            BlueprintName = "com.awareframework.ios.sensor.ambientnoise"
+            ReferencedContainer = "container:Pods/Pods.xcodeproj">
+         </BuildableReference>
+      </CodeCoverageTargets>
       <Testables>
          <TestableReference
             skipped = "NO">
