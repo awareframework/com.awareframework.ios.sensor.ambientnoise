@@ -213,11 +213,10 @@ class Tests: XCTestCase {
         XCTAssertEqual(samples,  sensor.CONFIG.samples)
     }
     
-    
     func testSyncModule(){
         #if targetEnvironment(simulator)
         
-        print("This test requires a real device.")
+        print("This test requires a real AmbientNoise.")
         
         #else
         // success //
@@ -234,21 +233,20 @@ class Tests: XCTestCase {
             }
         }
         let successExpectation = XCTestExpectation(description: "success sync")
-        let observer = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoiseSyncSuccess,
-                                                              object: nil, queue: .main) { (notification) in
-                                                                successExpectation.fulfill()
+        let observer = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoiseSyncCompletion,
+                                                              object: sensor, queue: .main) { (notification) in
+                                                                if let userInfo = notification.userInfo{
+                                                                    if let status = userInfo["status"] as? Bool {
+                                                                        if status == true {
+                                                                            successExpectation.fulfill()
+                                                                        }
+                                                                    }
+                                                                }
         }
-        
-        let syncExpectation = expectation(description: "sync method")
-        let syncObserver = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoiseSync , object: sensor, queue: .main) { (notification) in
-            syncExpectation.fulfill()
-            print("sync")
-        }
-        
         sensor.sync(force: true)
-        wait(for: [successExpectation,syncExpectation], timeout: 20)
+        wait(for: [successExpectation], timeout: 20)
         NotificationCenter.default.removeObserver(observer)
-        NotificationCenter.default.removeObserver(syncObserver)
+        
         ////////////////////////////////////
         
         // failure //
@@ -259,9 +257,15 @@ class Tests: XCTestCase {
             config.dbPath = "sync_db"
         })
         let failureExpectation = XCTestExpectation(description: "failure sync")
-        let failureObserver = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoiseSyncFailure,
-                                                                     object: nil, queue: .main) { (notification) in
-                                                                        failureExpectation.fulfill()
+        let failureObserver = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoiseSyncCompletion,
+                                                                     object: sensor2, queue: .main) { (notification) in
+                                                                        if let userInfo = notification.userInfo{
+                                                                            if let status = userInfo["status"] as? Bool {
+                                                                                if status == false {
+                                                                                    failureExpectation.fulfill()
+                                                                                }
+                                                                            }
+                                                                        }
         }
         if let engine = sensor2.dbEngine as? RealmEngine {
             engine.removeAll(AmbientNoiseData.self)
@@ -275,4 +279,5 @@ class Tests: XCTestCase {
         
         #endif
     }
+
 }

@@ -98,6 +98,7 @@ public class AmbientNoiseSensor: AwareSensor {
                     data.decibels = db
                     data.rms = rms
                     data.frequency = Double(mf)
+                    data.label = self.CONFIG.label
                     if rms > self.CONFIG.silenceThreshold {
                         data.isSilent = false
                     }
@@ -138,11 +139,13 @@ public class AmbientNoiseSensor: AwareSensor {
                 config.debug = self.CONFIG.debug
                 config.dispatchQueue = DispatchQueue(label: "com.awareframework.ios.sensor.ambientnoise.sync.queue")
                 config.completionHandler = { (status, error) in
-                    if status {
-                        self.notificationCenter.post(name: .actionAwareAmbientNoiseSyncSuccess, object: self)
-                    }else{
-                        self.notificationCenter.post(name: .actionAwareAmbientNoiseSyncFailure, object: self)
+                    var userInfo: Dictionary<String,Any> = [AmbientNoiseSensor.EXTRA_STATUS :status]
+                    if let e = error {
+                        userInfo[AmbientNoiseSensor.EXTRA_ERROR] = e
                     }
+                    self.notificationCenter.post(name: .actionAwareAmbientNoiseSyncCompletion ,
+                                                 object: self,
+                                                 userInfo:userInfo)
                 }
             })
             self.notificationCenter.post(name: .actionAwareAmbientNoiseSync, object: self)
@@ -167,8 +170,7 @@ extension Notification.Name {
     public static let actionAwareAmbientNoiseStop     = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_STOP)
     public static let actionAwareAmbientNoiseSync     = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_SYNC)
     public static let actionAwareAmbientNoiseSetLabel = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_SET_LABEL)
-    public static let actionAwareAmbientNoiseSyncSuccess = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_SYNC_SUCCESS)
-    public static let actionAwareAmbientNoiseSyncFailure = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_SYNC_FAILURE)
+    public static let actionAwareAmbientNoiseSyncCompletion = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_SYNC_COMPLETION)
 }
 
 extension AmbientNoiseSensor{
@@ -178,6 +180,7 @@ extension AmbientNoiseSensor{
     public static let ACTION_AWARE_AMBIENTNOISE_SET_LABEL = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESET_LABEL"
     public static let EXTRA_LABEL = "label"
     public static let ACTION_AWARE_AMBIENTNOISE_SYNC  = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_SYNC"
-    public static let ACTION_AWARE_AMBIENTNOISE_SYNC_SUCCESS  = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_SYNC_SUCCESS"
-    public static let ACTION_AWARE_AMBIENTNOISE_SYNC_FAILURE  = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_SYNC_FAILURE"
+    public static let ACTION_AWARE_AMBIENTNOISE_SYNC_COMPLETION  = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_SYNC_COMPLETION"
+    public static let EXTRA_STATUS = "status"
+    public static let EXTRA_ERROR = "error"
 }

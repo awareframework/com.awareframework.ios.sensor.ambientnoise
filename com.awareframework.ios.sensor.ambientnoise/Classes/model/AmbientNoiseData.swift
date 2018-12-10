@@ -10,7 +10,7 @@ import com_awareframework_ios_sensor_core
 
 public class AmbientNoiseData: AwareObject {
 
-    public static let TABLE_NAME = "ambientNoiseTable"
+    public static let TABLE_NAME = "ambientNoiseData"
     
     @objc dynamic public var frequency:Double = 0
     @objc dynamic public var decibels:Double  = 0
