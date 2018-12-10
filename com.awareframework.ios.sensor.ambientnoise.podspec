@@ -8,7 +8,7 @@
 
 Pod::Spec.new do |s|
 s.name             = 'com.awareframework.ios.sensor.ambientnoise'
-  s.version       = '0.2.2'
+  s.version       = '0.4.0'
 s.summary          = 'An Ambient Noise Sensor Module for AWARE Framework'
 
 # This description is used to generate tags and improve search results.
@@ -44,6 +44,6 @@ s.source_files = 'com.awareframework.ios.sensor.ambientnoise/Classes/**/*'
 s.public_header_files = 'com.awareframework.ios.sensor.ambientnoise/Classes/**/*.h'
 # s.frameworks = 'UIKit', 'MapKit'
 # s.dependency 'AFNetworking', '~> 2.3'
-s.dependency 'com.awareframework.ios.sensor.core', '~>0.3.3'
+s.dependency 'com.awareframework.ios.sensor.core', '~>0.4.1'
 
 end

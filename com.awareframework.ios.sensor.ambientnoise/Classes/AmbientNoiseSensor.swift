@@ -84,6 +84,7 @@ public class AmbientNoiseSensor: AwareSensor {
         if self.ambientNoiseMonitor == nil {
             self.ambientNoiseMonitor = ANMonitor()
             if let monitor = self.ambientNoiseMonitor {
+                print(Thread.isMainThread)
                 // analyzer.delegate = self
                 monitor.frequencyMin = Int32(self.CONFIG.interval)
                 monitor.sampleSize = Int32(self.CONFIG.samples)
@@ -100,16 +101,25 @@ public class AmbientNoiseSensor: AwareSensor {
                     if rms > self.CONFIG.silenceThreshold {
                         data.isSilent = false
                     }
-                    if let engine = self.dbEngine {
-                        engine.save(data, AmbientNoiseData.TABLE_NAME)
-                    }
                     if let observer = self.CONFIG.sensorObserver {
                         observer.onAmbientNoiseChanged(data: data)
                     }
-                    self.notificationCenter.post(name: .actionAwareAmbientNoise, object: nil)
+                    
+                    let queue = DispatchQueue(label:"com.awareframework.ios.sensor.ambientnoise.save.queue")
+                    queue.async {
+                        if let engine = self.dbEngine {
+                            engine.save(data) { error in
+                                if error == nil {
+                                    DispatchQueue.main.async {
+                                        self.notificationCenter.post(name: .actionAwareAmbientNoise, object: self)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 monitor.start()
-                self.notificationCenter.post(name: .actionAwareAmbientNoiseStart, object: nil)
+                self.notificationCenter.post(name: .actionAwareAmbientNoiseStart, object: self)
             }
         }
     }
@@ -118,7 +128,7 @@ public class AmbientNoiseSensor: AwareSensor {
         if let monitor = self.ambientNoiseMonitor {
             monitor.stop()
             self.ambientNoiseMonitor = nil
-            self.notificationCenter.post(name: .actionAwareAmbientNoiseStop, object: nil)
+            self.notificationCenter.post(name: .actionAwareAmbientNoiseStop, object: self)
         }
     }
     
@@ -126,15 +136,23 @@ public class AmbientNoiseSensor: AwareSensor {
         if let engine = self.dbEngine {
             engine.startSync(AmbientNoiseData.TABLE_NAME, AmbientNoiseData.self, DbSyncConfig.init().apply{config in
                 config.debug = self.CONFIG.debug
+                config.dispatchQueue = DispatchQueue(label: "com.awareframework.ios.sensor.ambientnoise.sync.queue")
+                config.completionHandler = { (status, error) in
+                    if status {
+                        self.notificationCenter.post(name: .actionAwareAmbientNoiseSyncSuccess, object: self)
+                    }else{
+                        self.notificationCenter.post(name: .actionAwareAmbientNoiseSyncFailure, object: self)
+                    }
+                }
             })
-            self.notificationCenter.post(name: .actionAwareAmbientNoiseSync, object: nil)
+            self.notificationCenter.post(name: .actionAwareAmbientNoiseSync, object: self)
         }
     }
     
-    public func set(label:String){
+    public override func set(label:String){
         self.CONFIG.label = label
         self.notificationCenter.post(name: .actionAwareAmbientNoiseSetLabel,
-                                     object: nil,
+                                     object: self,
                                      userInfo: [AmbientNoiseSensor.EXTRA_LABEL: label])
     }
 }
@@ -149,6 +167,8 @@ extension Notification.Name {
     public static let actionAwareAmbientNoiseStop     = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_STOP)
     public static let actionAwareAmbientNoiseSync     = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_SYNC)
     public static let actionAwareAmbientNoiseSetLabel = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_SET_LABEL)
+    public static let actionAwareAmbientNoiseSyncSuccess = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_SYNC_SUCCESS)
+    public static let actionAwareAmbientNoiseSyncFailure = Notification.Name(AmbientNoiseSensor.ACTION_AWARE_AMBIENTNOISE_SYNC_FAILURE)
 }
 
 extension AmbientNoiseSensor{
@@ -158,4 +178,6 @@ extension AmbientNoiseSensor{
     public static let ACTION_AWARE_AMBIENTNOISE_SET_LABEL = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESET_LABEL"
     public static let EXTRA_LABEL = "label"
     public static let ACTION_AWARE_AMBIENTNOISE_SYNC  = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_SYNC"
+    public static let ACTION_AWARE_AMBIENTNOISE_SYNC_SUCCESS  = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_SYNC_SUCCESS"
+    public static let ACTION_AWARE_AMBIENTNOISE_SYNC_FAILURE  = "com.awareframework.ios.sensor.ambientnoise.ACTION_AWARE_AMBIENTNOISESENSOR_SYNC_FAILURE"
 }

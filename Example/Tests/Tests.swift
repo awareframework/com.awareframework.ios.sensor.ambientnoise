@@ -1,6 +1,7 @@
 import XCTest
 import RealmSwift
 import com_awareframework_ios_sensor_ambientnoise
+import com_awareframework_ios_sensor_core
 
 class Tests: XCTestCase {
     
@@ -13,6 +14,66 @@ class Tests: XCTestCase {
     override func tearDown() {
         // Put teardown code here. This method is called after the invocation of each test method in the class.
         super.tearDown()
+    }
+    
+    var token1:NotificationToken? = nil
+    
+    func testSensorModule(){
+        
+        #if targetEnvironment(simulator)
+        
+        print("This test requires a real device.")
+        
+        #else
+
+        let sensor = AmbientNoiseSensor.init(AmbientNoiseSensor.Config().apply{ config in
+            config.debug = true
+            config.dbType = .REALM
+            config.dbPath = "sensor_module"
+        })
+        let expect = expectation(description: "sensor module")
+        if let realmEngine = sensor.dbEngine as? RealmEngine {
+            // remove old data
+            realmEngine.removeAll(AmbientNoiseData.self)
+            // get a RealmEngine Instance
+            if let realm = realmEngine.getRealmInstance() {
+                // set Realm DB observer
+                token1 = realm.observe { (notification, realm) in
+                    switch notification {
+                    case .didChange:
+                        // check database size
+                        let results = realm.objects(AmbientNoiseData.self)
+                        print(results.count)
+                        XCTAssertGreaterThanOrEqual(results.count, 1)
+                        realm.invalidate()
+                        expect.fulfill()
+                        self.token1 = nil
+                        break;
+                    case .refreshRequired:
+                        break;
+                    }
+                }
+            }
+        }
+        
+        var storageExpect:XCTestExpectation? = expectation(description: "sensor storage notification")
+        var token: NSObjectProtocol?
+        token = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoise,
+                                                              object: sensor,
+                                                              queue: .main) { (notification) in
+                                                                if let exp = storageExpect {
+                                                                    exp.fulfill()
+                                                                    storageExpect = nil
+                                                                    NotificationCenter.default.removeObserver(token!)
+                                                                }
+
+        }
+        
+        sensor.start() // start sensor
+        
+        wait(for: [expect,storageExpect!], timeout: 10)
+        sensor.stop()
+        #endif
     }
     
     func testObserver(){
@@ -73,7 +134,7 @@ class Tests: XCTestCase {
         /// test set label action ///
         let expectSetLabel = expectation(description: "set label")
         let newLabel = "hello"
-        let labelObserver = NotificationCenter.default.addObserver(forName: .actionAwareAmbientNoiseSetLabel, object: nil, queue: .main) { (notification) in
+        let labelObserver = NotificationCenter.default.addObserver(forName: .actionAwareAmbientNoiseSetLabel, object: sensor, queue: .main) { (notification) in
             let dict = notification.userInfo;
             if let d = dict as? Dictionary<String,String>{
                 XCTAssertEqual(d[AmbientNoiseSensor.EXTRA_LABEL], newLabel)
@@ -85,16 +146,6 @@ class Tests: XCTestCase {
         sensor.set(label:newLabel)
         wait(for: [expectSetLabel], timeout: 5)
         NotificationCenter.default.removeObserver(labelObserver)
-        
-        /// test sync action ////
-        let expectSync = expectation(description: "sync")
-        let syncObserver = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoiseSync , object: nil, queue: .main) { (notification) in
-            expectSync.fulfill()
-            print("sync")
-        }
-        sensor.sync()
-        wait(for: [expectSync], timeout: 5)
-        NotificationCenter.default.removeObserver(syncObserver)
         
         
         #if targetEnvironment(simulator)
@@ -162,11 +213,66 @@ class Tests: XCTestCase {
         XCTAssertEqual(samples,  sensor.CONFIG.samples)
     }
     
-    func testPerformanceExample() {
-        // This is an example of a performance test case.
-        self.measure() {
-            // Put the code you want to measure the time of here.
-        }
-    }
     
+    func testSyncModule(){
+        #if targetEnvironment(simulator)
+        
+        print("This test requires a real device.")
+        
+        #else
+        // success //
+        let sensor = AmbientNoiseSensor.init(AmbientNoiseSensor.Config().apply{ config in
+            config.debug = true
+            config.dbType = .REALM
+            config.dbHost = "node.awareframework.com:1001"
+            config.dbPath = "sync_db"
+        })
+        if let engine = sensor.dbEngine as? RealmEngine {
+            engine.removeAll(AmbientNoiseData.self)
+            for _ in 0..<100 {
+                engine.save(AmbientNoiseData())
+            }
+        }
+        let successExpectation = XCTestExpectation(description: "success sync")
+        let observer = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoiseSyncSuccess,
+                                                              object: nil, queue: .main) { (notification) in
+                                                                successExpectation.fulfill()
+        }
+        
+        let syncExpectation = expectation(description: "sync method")
+        let syncObserver = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoiseSync , object: sensor, queue: .main) { (notification) in
+            syncExpectation.fulfill()
+            print("sync")
+        }
+        
+        sensor.sync(force: true)
+        wait(for: [successExpectation,syncExpectation], timeout: 20)
+        NotificationCenter.default.removeObserver(observer)
+        NotificationCenter.default.removeObserver(syncObserver)
+        ////////////////////////////////////
+        
+        // failure //
+        let sensor2 = AmbientNoiseSensor.init(AmbientNoiseSensor.Config().apply{ config in
+            config.debug = true
+            config.dbType = .REALM
+            config.dbHost = "node.awareframework.com.com" // wrong url
+            config.dbPath = "sync_db"
+        })
+        let failureExpectation = XCTestExpectation(description: "failure sync")
+        let failureObserver = NotificationCenter.default.addObserver(forName: Notification.Name.actionAwareAmbientNoiseSyncFailure,
+                                                                     object: nil, queue: .main) { (notification) in
+                                                                        failureExpectation.fulfill()
+        }
+        if let engine = sensor2.dbEngine as? RealmEngine {
+            engine.removeAll(AmbientNoiseData.self)
+            for _ in 0..<100 {
+                engine.save(AmbientNoiseData())
+            }
+        }
+        sensor2.sync(force: true)
+        wait(for: [failureExpectation], timeout: 20)
+        NotificationCenter.default.removeObserver(failureObserver)
+        
+        #endif
+    }
 }
