@@ -1,0 +1,145 @@
+# AWARE: Ambient Noise
+
+[![Swift Package Manager compatible](https://img.shields.io/badge/Swift%20Package%20Manager-compatible-brightgreen.svg)](https://github.com/apple/swift-package-manager)
+
+This sensor module captures ambient sound levels (decibels) and classifies audio using Apple's SoundAnalysis framework. It provides two concurrent data streams: continuous decibel measurements and sound classification labels with confidence scores.
+
+## Requirements
+iOS 15 or later
+
+## Installation
+
+1. Open Package Manager Windows
+    * Open `Xcode` -> Select `Menu Bar` -> `File` -> `App Package Dependencies...`
+
+2. Find the package using the manager
+    * Select `Search Package URL` and type `https://github.com/awareframework/com.awareframework.ios.sensor.ambientnoise.git`
+
+3. Import the package into your target.
+
+4. Add `NSMicrophoneUsageDescription` to your `Info.plist`.
+
+## Public functions
+
+### AmbientNoiseSensor
+
++ `init(_ config: AmbientNoiseSensor.Config)`: Initializes the sensor with the given configuration.
++ `start()`: Starts audio recording and analysis.
++ `stop()`: Stops audio processing and releases the audio engine.
++ `sync(force:)`: Syncs stored data to the configured host.
++ `set(label:)`: Sets a custom label applied to all subsequent data points.
++ `availableMicrophoneInputs() -> [AmbientNoiseMicrophoneInput]`: Returns the list of available microphone inputs.
++ `refreshCurrentMicrophone()`: Updates the current microphone info in the config.
+
+### AmbientNoiseSensor.Config
+
+Class to hold the configuration of the sensor.
+
+#### Fields
+
++ `sensorObserver: AmbientNoiseSensorObserver?`: Callback for live data updates.
++ `activateAmbientNoiseSensor: Bool`: Enable decibel measurement. (default = `true`)
++ `activateAudioClassificationSensor: Bool`: Enable sound classification via SoundAnalysis. (default = `true`)
++ `audioClassifierModel: MLModel?`: Custom Core ML classifier. Uses the built-in iOS classifier when `nil`. (default = `nil`)
++ `storeOnlyTopK: Int?`: If set, only the top-K classifications by confidence are stored per analysis window. (default = `nil` = store all)
++ `preferredInputUID: String`: UID of the preferred microphone input. Leave empty to use the system default.
++ `bufferSize: UInt32`: AVAudioEngine tap buffer size. (default = 8192)
++ `onBus: Int`: Audio engine input bus. (default = 0)
++ `enabled: Bool`: Sensor is enabled or not. (default = `false`)
++ `debug: Bool`: Enable/disable logging. (default = `false`)
++ `label: String`: Label for the data. (default = "")
++ `deviceId: String`: Id of the device associated with the events. (default = "")
++ `dbEncryptionKey`: Encryption key for the database. (default = `nil`)
++ `dbType: Engine`: Which db engine to use for saving data. (default = `Engine.DatabaseType.NONE`)
++ `dbPath: String`: Path of the database.
++ `dbHost: String`: Host for syncing the database. (default = `nil`)
+
+## Broadcasts
+
+### Fired Broadcasts
+
++ `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE`: fired when a new decibel measurement is recorded.
++ `AmbientNoiseSensor.ACTION_AWARE_AUDIO_LABEL`: fired when a new audio classification result is available.
+
+### Received Broadcasts
+
++ `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE_START`: received broadcast to start the sensor.
++ `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE_STOP`: received broadcast to stop the sensor.
++ `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE_SYNC`: received broadcast to send sync attempt to the host.
++ `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE_SET_LABEL`: received broadcast to set the data label. Label is expected in the `AmbientNoiseSensor.EXTRA_LABEL` field of the notification userInfo.
+
+## Data Representations
+
+### AmbientNoiseData
+
+Contains the decibel measurement.
+
+| Field     | Type   | Description                                                     |
+| --------- | ------ | --------------------------------------------------------------- |
+| db        | Double | Sound level in decibels (dBFS)                                  |
+| label     | String | Customizable label. Useful for data calibration or traceability |
+| deviceId  | String | AWARE device UUID                                               |
+| timestamp | Int64  | Unixtime milliseconds since 1970                                |
+| timezone  | Int    | Timezone of the device                                          |
+| os        | String | Operating system of the device (iOS)                            |
+
+### AudioLabelData
+
+Contains a sound classification result.
+
+| Field      | Type   | Description                                                     |
+| ---------- | ------ | --------------------------------------------------------------- |
+| audioLabel | String | Sound classification label (e.g., "music", "speech", "silence") |
+| confidence | Double | Confidence score of the classification [0.0–1.0]                |
+| label      | String | Customizable label. Useful for data calibration or traceability |
+| deviceId   | String | AWARE device UUID                                               |
+| timestamp  | Int64  | Unixtime milliseconds since 1970                                |
+| timezone   | Int    | Timezone of the device                                          |
+| os         | String | Operating system of the device (iOS)                            |
+
+## Example usage
+
+```swift
+import com_awareframework_ios_sensor_ambientnoise
+```
+
+```swift
+let sensor = AmbientNoiseSensor(AmbientNoiseSensor.Config().apply { config in
+    config.sensorObserver = Observer()
+    config.activateAmbientNoiseSensor = true
+    config.activateAudioClassificationSensor = true
+    config.storeOnlyTopK = 3
+    config.debug = true
+})
+
+sensor.start()
+
+// Later...
+sensor.stop()
+```
+
+```swift
+class Observer: AmbientNoiseSensorObserver {
+    func onAmbientNoiseChanged(data: AmbientNoiseData) {
+        print("Decibels:", data.db)
+    }
+
+    func onAudioLabelChanged(data: AudioLabelData) {
+        print("Label:", data.audioLabel, "Confidence:", data.confidence)
+    }
+}
+```
+
+## Author
+Yuuki Nishiyama (The University of Tokyo), nishiyama@csis.u-tokyo.ac.jp
+
+## Related Links
+* [Apple | SoundAnalysis](https://developer.apple.com/documentation/soundanalysis)
+* [Apple | AVAudioEngine](https://developer.apple.com/documentation/avfaudio/avaudioengine)
+
+## License
+Copyright (c) 2018 AWARE Mobile Context Instrumentation Middleware/Framework (http://www.awareframework.com)
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
