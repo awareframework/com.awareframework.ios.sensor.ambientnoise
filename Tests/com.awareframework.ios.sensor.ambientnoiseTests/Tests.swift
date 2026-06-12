@@ -54,10 +54,10 @@ final class AmbientNoiseSensorTests: XCTestCase {
     }
 
     func testAmbientNoiseDataTableName() {
-        XCTAssertEqual(AmbientNoiseData.databaseTableName, "ambient_noise")
+        XCTAssertEqual(AmbientNoiseData.databaseTableName, "ios_ambient_noise")
     }
 
     func testAudioLabelDataTableName() {
-        XCTAssertEqual(AudioLabelData.databaseTableName, "audio_label")
+        XCTAssertEqual(AudioLabelData.databaseTableName, "ios_audio_label")
     }
 }

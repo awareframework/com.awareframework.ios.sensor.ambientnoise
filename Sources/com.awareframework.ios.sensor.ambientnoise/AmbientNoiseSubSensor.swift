@@ -12,7 +12,7 @@ public class AmbientNoiseSubSensor: AwareSensor {
 
     public init(_ config: AmbientNoiseSensor.Config) {
         super.init()
-        self.CONFIG = config
+        self.CONFIG = Self.makeConfig(from: config)
         self.CONFIG.dbPath = AmbientNoiseData.databaseTableName
         self.CONFIG.dbTableName = AmbientNoiseData.databaseTableName
         self.initializeDbEngine(config: self.CONFIG)
@@ -29,6 +29,46 @@ public class AmbientNoiseSubSensor: AwareSensor {
         }
     }
 
+    public func applySyncSettings(
+        from parentConfig: AmbientNoiseSensor.Config,
+        parentSyncConfig: DbSyncConfig?,
+        completionHandler: DbSyncCompletionHandler?
+    ) {
+        CONFIG.dbHost = parentConfig.dbHost
+        CONFIG.dbType = parentConfig.dbType
+        CONFIG.dbEncryptionKey = parentConfig.dbEncryptionKey
+        CONFIG.serverType = parentConfig.serverType
+        CONFIG.studyNumber = parentConfig.studyNumber
+        CONFIG.studyKey = parentConfig.studyKey
+        CONFIG.debug = parentConfig.debug
+        CONFIG.label = parentConfig.label
+        CONFIG.dbPath = AmbientNoiseData.databaseTableName
+        CONFIG.dbTableName = AmbientNoiseData.databaseTableName
+        initializeDbEngine(config: CONFIG)
+
+        let config = syncConfig ?? DbSyncConfig()
+        if let parentSyncConfig {
+            config.removeAfterSync = parentSyncConfig.removeAfterSync
+            config.batchSize = parentSyncConfig.batchSize
+            config.markAsSynced = parentSyncConfig.markAsSynced
+            config.skipSyncedData = parentSyncConfig.skipSyncedData
+            config.keepLastData = parentSyncConfig.keepLastData
+            config.deviceId = parentSyncConfig.deviceId
+            config.debugLevel = parentSyncConfig.debugLevel
+            config.progressHandler = parentSyncConfig.progressHandler
+            config.backgroundSession = parentSyncConfig.backgroundSession
+            config.compactDataFormat = parentSyncConfig.compactDataFormat
+            config.test = parentSyncConfig.test
+        }
+        config.serverType = CONFIG.serverType
+        config.studyNumber = CONFIG.studyNumber
+        config.studyKey = CONFIG.studyKey
+        config.debug = CONFIG.debug
+        config.completionHandler = completionHandler
+        config.dispatchQueue = DispatchQueue(label: "com.awareframework.ios.sensor.ambientnoise.ambientnoise.sync.queue")
+        syncConfig = config
+    }
+
     public override func start() {}
 
     public override func stop() {}
@@ -40,4 +80,30 @@ public class AmbientNoiseSubSensor: AwareSensor {
     }
 
     public override func set(label: String) {}
+
+    private static func makeConfig(from source: AmbientNoiseSensor.Config) -> AmbientNoiseSensor.Config {
+        AmbientNoiseSensor.Config().apply { config in
+            config.enabled = source.enabled
+            config.debug = source.debug
+            config.label = source.label
+            config.deviceId = source.deviceId
+            config.dbEncryptionKey = source.dbEncryptionKey
+            config.dbType = source.dbType
+            config.serverType = source.serverType
+            config.studyNumber = source.studyNumber
+            config.studyKey = source.studyKey
+            config.dbHost = source.dbHost
+            config.onBus = source.onBus
+            config.bufferSize = source.bufferSize
+            config.audioClassifierModel = source.audioClassifierModel
+            config.activateAmbientNoiseSensor = source.activateAmbientNoiseSensor
+            config.activateAudioClassificationSensor = source.activateAudioClassificationSensor
+            config.storeOnlyTopK = source.storeOnlyTopK
+            config.preferredInputUID = source.preferredInputUID
+            config.currentInputUID = source.currentInputUID
+            config.currentInputName = source.currentInputName
+            config.currentInputPortType = source.currentInputPortType
+            config.sensorObserver = source.sensorObserver
+        }
+    }
 }

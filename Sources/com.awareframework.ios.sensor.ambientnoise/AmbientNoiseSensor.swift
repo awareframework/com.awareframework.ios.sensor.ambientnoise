@@ -191,6 +191,13 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         super.init()
         self.CONFIG = config
         self.initializeDbEngine(config: config)
+        super.syncConfig = DbSyncConfig().apply { syncConfig in
+            syncConfig.serverType = config.serverType
+            syncConfig.studyNumber = config.studyNumber
+            syncConfig.studyKey = config.studyKey
+            syncConfig.debug = config.debug
+            syncConfig.batchSize = 1000
+        }
         ambientNoiseSubSensor = AmbientNoiseSubSensor(config)
         audioLabelSubSensor = AudioLabelSubSensor(config)
 
@@ -227,6 +234,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
     public override func sync(force: Bool = false) {
         notificationCenter.post(name: .actionAwareAmbientNoiseSync, object: self)
+        applySubSensorSyncSettings()
         ambientNoiseSubSensor?.sync(force: force)
         audioLabelSubSensor?.sync(force: force)
     }
@@ -237,6 +245,44 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             name: .actionAwareAmbientNoiseSetLabel,
             object: self,
             userInfo: [AmbientNoiseSensor.EXTRA_LABEL: label]
+        )
+    }
+
+    private func applySubSensorSyncSettings() {
+        let lock = NSLock()
+        var remaining = 2
+        var hasFailure = false
+        var lastError: Error?
+        let completion: DbSyncCompletionHandler = { [weak self] status, error in
+            lock.lock()
+            remaining -= 1
+            hasFailure = hasFailure || status == false
+            lastError = error ?? lastError
+            let shouldNotify = remaining <= 0
+            let finalStatus = hasFailure == false
+            let finalError = lastError
+            lock.unlock()
+
+            guard shouldNotify, let self else { return }
+            var userInfo: [String: Any] = [AmbientNoiseSensor.EXTRA_STATUS: finalStatus]
+            if let finalError {
+                userInfo[AmbientNoiseSensor.EXTRA_ERROR] = finalError
+            }
+            self.notificationCenter.post(
+                name: .actionAwareAmbientNoiseSyncCompletion,
+                object: self,
+                userInfo: userInfo
+            )
+        }
+        ambientNoiseSubSensor?.applySyncSettings(
+            from: CONFIG,
+            parentSyncConfig: syncConfig,
+            completionHandler: completion
+        )
+        audioLabelSubSensor?.applySyncSettings(
+            from: CONFIG,
+            parentSyncConfig: syncConfig,
+            completionHandler: completion
         )
     }
 

@@ -17,7 +17,7 @@ public struct AudioLabelData: BaseDbModelSQLite {
     public var deviceId: String = AwareUtils.getCommonDeviceId()
     public var label: String
 
-    public static let databaseTableName = "audio_label"
+    public static let databaseTableName = "ios_audio_label"
 
     public var audioLabel: String = ""
     public var confidence: Double = 0.0

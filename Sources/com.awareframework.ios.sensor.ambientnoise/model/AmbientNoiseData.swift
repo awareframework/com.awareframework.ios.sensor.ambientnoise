@@ -17,7 +17,7 @@ public struct AmbientNoiseData: BaseDbModelSQLite {
     public var deviceId: String = AwareUtils.getCommonDeviceId()
     public var label: String
 
-    public static let databaseTableName = "ambient_noise"
+    public static let databaseTableName = "ios_ambient_noise"
 
     public var db: Double = 0.0
 
