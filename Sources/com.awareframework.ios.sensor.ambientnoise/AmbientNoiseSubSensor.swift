@@ -8,12 +8,16 @@ import com_awareframework_ios_core
 
 public class AmbientNoiseSubSensor: AwareSensor {
 
+    private static let defaultDbPath = "aware_ambient_noise"
+
     public var CONFIG = AmbientNoiseSensor.Config()
 
     public init(_ config: AmbientNoiseSensor.Config) {
         super.init()
         self.CONFIG = Self.makeConfig(from: config)
-        self.CONFIG.dbPath = AmbientNoiseData.databaseTableName
+        if self.CONFIG.dbPath.isEmpty {
+            self.CONFIG.dbPath = Self.defaultDbPath
+        }
         self.CONFIG.dbTableName = AmbientNoiseData.databaseTableName
         self.initializeDbEngine(config: self.CONFIG)
         super.syncConfig = DbSyncConfig().apply(closure: { config in
@@ -42,7 +46,7 @@ public class AmbientNoiseSubSensor: AwareSensor {
         CONFIG.studyKey = parentConfig.studyKey
         CONFIG.debug = parentConfig.debug
         CONFIG.label = parentConfig.label
-        CONFIG.dbPath = AmbientNoiseData.databaseTableName
+        CONFIG.dbPath = parentConfig.dbPath.isEmpty ? Self.defaultDbPath : parentConfig.dbPath
         CONFIG.dbTableName = AmbientNoiseData.databaseTableName
         initializeDbEngine(config: CONFIG)
 
@@ -89,6 +93,8 @@ public class AmbientNoiseSubSensor: AwareSensor {
             config.deviceId = source.deviceId
             config.dbEncryptionKey = source.dbEncryptionKey
             config.dbType = source.dbType
+            config.dbPath = source.dbPath
+            config.dbTableName = source.dbTableName
             config.serverType = source.serverType
             config.studyNumber = source.studyNumber
             config.studyKey = source.studyKey

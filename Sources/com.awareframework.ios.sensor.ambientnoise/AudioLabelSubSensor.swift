@@ -8,13 +8,17 @@ import com_awareframework_ios_core
 
 public class AudioLabelSubSensor: AwareSensor {
 
+    private static let defaultDbPath = "aware_ambient_noise"
+
     public var CONFIG = AmbientNoiseSensor.Config()
 
     public init(_ config: AmbientNoiseSensor.Config) {
         super.init()
         self.CONFIG = Self.makeConfig(from: config)
         self.CONFIG.dbTableName = AudioLabelData.databaseTableName
-        self.CONFIG.dbPath = AudioLabelData.databaseTableName
+        if self.CONFIG.dbPath.isEmpty {
+            self.CONFIG.dbPath = Self.defaultDbPath
+        }
         self.initializeDbEngine(config: self.CONFIG)
         super.syncConfig = DbSyncConfig().apply(closure: { config in
             config.serverType = self.CONFIG.serverType
@@ -48,7 +52,7 @@ public class AudioLabelSubSensor: AwareSensor {
         CONFIG.studyKey = parentConfig.studyKey
         CONFIG.debug = parentConfig.debug
         CONFIG.label = parentConfig.label
-        CONFIG.dbPath = AudioLabelData.databaseTableName
+        CONFIG.dbPath = parentConfig.dbPath.isEmpty ? Self.defaultDbPath : parentConfig.dbPath
         CONFIG.dbTableName = AudioLabelData.databaseTableName
         initializeDbEngine(config: CONFIG)
 
@@ -95,6 +99,8 @@ public class AudioLabelSubSensor: AwareSensor {
             config.deviceId = source.deviceId
             config.dbEncryptionKey = source.dbEncryptionKey
             config.dbType = source.dbType
+            config.dbPath = source.dbPath
+            config.dbTableName = source.dbTableName
             config.serverType = source.serverType
             config.studyNumber = source.studyNumber
             config.studyKey = source.studyKey
