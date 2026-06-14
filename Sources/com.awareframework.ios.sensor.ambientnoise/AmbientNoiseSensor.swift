@@ -207,6 +207,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     private var pendingStartAfterForeground = false
     private var shouldResumeAfterInterruption = false
     private var audioAnalyzerSetupAttempt = 0
+    private var interruptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var cachedApplicationState: UIApplication.State = .active
     private let applicationStateLock = NSLock()
     private var loadedAudioClassifierModel: MLModel?
@@ -1114,11 +1115,10 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         logAudioProcessingState("suspending audio processing for interruption")
         isSensorStarted = false
         pendingStartAfterForeground = false
-        // Preserve session state: for Siri (shouldResume=true), the session remains active and
-        // we restart the engine only, without calling setCategory/setActive again. For phone
-        // calls (shouldResume=false), handleInterruption explicitly sets isReadySessionCategory=false
-        // before restarting, so the full session re-setup happens at that point.
-        stopAudioProcessing(preserveAudioSession: true)
+        // Always perform a full stop: Apple requires setActive(true) to be called after any
+        // audio session interruption — including Siri — before restarting the engine. Skipping
+        // it leaves the RemoteIO output format at 0 Hz, causing engine start to fail.
+        stopAudioProcessing()
     }
 
     @objc private func handleRouteChange(notification: Notification) {
@@ -1182,6 +1182,19 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 shouldResumeAfterInterruption =
                     isSensorStarted || hasAudioTap || audioEngine.isRunning
                 isSuspended = true
+                // Request background execution time so the app stays alive to receive .ended
+                // and restart after the interruption. Without this, stopping the audio engine
+                // may cause iOS to suspend the app before .ended arrives.
+                DispatchQueue.main.async {
+                    if self.interruptionBackgroundTask == .invalid {
+                        self.interruptionBackgroundTask = UIApplication.shared.beginBackgroundTask(
+                            withName: "com.awareframework.ios.sensor.ambientnoise.interruption"
+                        ) {
+                            UIApplication.shared.endBackgroundTask(self.interruptionBackgroundTask)
+                            self.interruptionBackgroundTask = .invalid
+                        }
+                    }
+                }
                 suspendAudioProcessingForInterruption()
             }
         case .ended:
@@ -1197,16 +1210,20 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             }
             logAudioProcessingState(
                 shouldResume
-                    ? "interruption ended with shouldResume (Siri / voice input): reusing session"
+                    ? "interruption ended with shouldResume (Siri / voice input): reactivating session"
                     : "interruption ended without shouldResume (phone call etc.): resetting session"
             )
 
             if shouldResume {
-                // Siri / voice-to-text: session is still valid — restart engine only.
                 isSuspended = false
                 shouldResumeAfterInterruption = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    guard self.isUserRequestedRunning else {
+                        self.endInterruptionBackgroundTask()
+                        return
+                    }
                     self.startSensor(allowBackgroundSessionStart: true)
+                    self.endInterruptionBackgroundTask()
                 }
             } else {
                 // Phone call / YouTube etc.: session was taken over — force full re-setup.
@@ -1214,9 +1231,13 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 isSuspended = false
                 shouldResumeAfterInterruption = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    guard self.isUserRequestedRunning else { return }
+                    guard self.isUserRequestedRunning else {
+                        self.endInterruptionBackgroundTask()
+                        return
+                    }
                     self.startSensor(allowBackgroundSessionStart: true)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        self.endInterruptionBackgroundTask()
                         guard self.isUserRequestedRunning, !self.isAudioProcessingRunning else {
                             return
                         }
@@ -1229,6 +1250,14 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             }
         @unknown default:
             break
+        }
+    }
+
+    private func endInterruptionBackgroundTask() {
+        DispatchQueue.main.async {
+            guard self.interruptionBackgroundTask != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(self.interruptionBackgroundTask)
+            self.interruptionBackgroundTask = .invalid
         }
     }
 
