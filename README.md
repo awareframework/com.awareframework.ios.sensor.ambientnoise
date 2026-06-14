@@ -56,7 +56,7 @@ Class to hold the configuration of the sensor.
 + `noiseLevelExtensionEnabled: Bool`: Allow high ambient noise levels to extend the active phase of the duty cycle. (default = `false`)
 + `noiseLevelThreshold: Double`: Decibel threshold (dBFS) above which the duty cycle active phase is extended. (default = `-30.0`)
 + `extensionDuration: TimeInterval`: Duration in seconds by which the active phase is extended when a trigger condition is met. (default = `60`)
-+ `processingFailureNotificationsEnabled: Bool`: Post a local user notification when audio processing fails. Notifications are rate-limited to at most one per minute. (default = `false`)
++ `processingFailureNotificationsEnabled: Bool`: Post a local user notification when the audio engine fails to start (e.g., interrupted by video or music playback from another app). The notification title is "Ambient noise recording stopped" and prompts the user to open the app and restart the sensor. Notifications are rate-limited to at most one per minute. (default = `false`)
 + `preferredInputUID: String`: UID of the preferred microphone input. Leave empty to use the system default.
 + `bufferSize: UInt32`: AVAudioEngine tap buffer size. (default = `16384`)
 + `onBus: Int`: Audio engine input bus. (default = `0`)
@@ -89,6 +89,7 @@ For this reason, the sensor skips the audio classification model built into iOS 
 + `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE`: fired when a new decibel measurement is recorded.
 + `AmbientNoiseSensor.ACTION_AWARE_AUDIO_LABEL`: fired when a new audio classification result is available.
 + `AmbientNoiseSensor.ACTION_AWARE_AUDIO_PROCESSING_ERROR`: fired when audio processing encounters an error. The error description is available in the `AmbientNoiseSensor.EXTRA_ERROR` field of the notification `userInfo`.
++ `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE_MICROPHONE_CHANGED`: fired when the active audio input changes (e.g., headset connected or disconnected, Bluetooth device switched). The UID of the previous input is available in the `AmbientNoiseSensor.EXTRA_PREVIOUS_INPUT_UID` field of the notification `userInfo`.
 
 ### Received Broadcasts
 
@@ -96,6 +97,31 @@ For this reason, the sensor skips the audio classification model built into iOS 
 + `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE_STOP`: received broadcast to stop the sensor.
 + `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE_SYNC`: received broadcast to send sync attempt to the host.
 + `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE_SET_LABEL`: received broadcast to set the data label. Label is expected in the `AmbientNoiseSensor.EXTRA_LABEL` field of the notification userInfo.
+
+## Audio Session Resilience
+
+The sensor handles audio session interruptions and route changes automatically.
+
+### Audio route changes
+
+When the active audio input route changes (e.g., a headset is connected or disconnected, a Bluetooth microphone is switched, or the system audio category changes), the sensor stops the audio engine and restarts it with the new route — without tearing down the audio session. If a `preferredInputUID` is configured and the new route includes that device, it is re-applied before restarting.
+
+When the previous input becomes unavailable and no alternative input exists, the sensor fires `ACTION_AWARE_AUDIO_PROCESSING_ERROR` and, if `processingFailureNotificationsEnabled` is `true`, sends a local notification prompting the user to restart.
+
+Route change restarts are suppressed while an audio session interruption is being recovered, so Siri and phone call interruptions are handled independently.
+
+### Audio session interruptions
+
+When another app takes control of the audio session (e.g., Siri, a phone call, or video/music playback), the sensor suspends recording. When the interruption ends, the sensor attempts to restart automatically, retrying up to three times with a short delay between each attempt.
+
+If the restart fails after all retries and `processingFailureNotificationsEnabled` is `true`, the user receives a local notification:
+
+> **Ambient noise recording stopped**
+> Audio recording was stopped by another app (e.g., video or music playback). Please open the app and restart the sensor.
+
+### Foreground recovery
+
+If the audio engine could not be restarted while the app was in the background (e.g., after a failed interruption recovery), the sensor restarts automatically when the app returns to the foreground — as long as `start()` has been called and `stop()` has not. No additional call to `start()` is needed.
 
 ## Data Representations
 

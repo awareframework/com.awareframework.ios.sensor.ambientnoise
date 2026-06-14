@@ -62,6 +62,8 @@ extension Notification.Name {
         AmbientNoiseSensor.ACTION_AWARE_AUDIO_LABEL)
     public static let actionAwareAudioProcessingError = Notification.Name(
         AmbientNoiseSensor.ACTION_AWARE_AUDIO_PROCESSING_ERROR)
+    public static let actionAwareAmbientNoiseMicrophoneChanged = Notification.Name(
+        AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE_MICROPHONE_CHANGED)
 }
 
 // MARK: - Action keys
@@ -82,9 +84,12 @@ extension AmbientNoiseSensor {
         "com.awareframework.ios.sensor.ambientnoise.audio_label"
     public static let ACTION_AWARE_AUDIO_PROCESSING_ERROR =
         "com.awareframework.ios.sensor.ambientnoise.audio_processing_error"
+    public static let ACTION_AWARE_AMBIENT_NOISE_MICROPHONE_CHANGED =
+        "com.awareframework.ios.sensor.ambientnoise.microphone_changed"
     public static let EXTRA_LABEL = "label"
     public static let EXTRA_STATUS = "status"
     public static let EXTRA_ERROR = "error"
+    public static let EXTRA_PREVIOUS_INPUT_UID = "previousInputUID"
     public static let TAG = "com.awareframework.ios.sensor.ambientnoise"
 }
 
@@ -197,6 +202,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     private var isSuspended = false
     private var isReadySessionCategory = false
     private var isSensorStarted = false
+    private var isUserRequestedRunning = false
     private var hasAudioTap = false
     private var pendingStartAfterForeground = false
     private var shouldResumeAfterInterruption = false
@@ -403,6 +409,12 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(handleRouteChange),
+            name: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(handleDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification,
             object: nil
@@ -439,6 +451,11 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         )
         NotificationCenter.default.removeObserver(
             self,
+            name: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        NotificationCenter.default.removeObserver(
+            self,
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
@@ -462,10 +479,12 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     // MARK: AwareSensor overrides
 
     public override func start() {
+        isUserRequestedRunning = true
         startSensor()
     }
 
     public override func stop() {
+        isUserRequestedRunning = false
         isSensorStarted = false
         pendingStartAfterForeground = false
         shouldResumeAfterInterruption = false
@@ -671,6 +690,8 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             isSensorStarted = false
             handleAudioProcessingError(
                 "Audio engine failed to start: \(error.localizedDescription)")
+            sendProcessingErrorNotification(
+                "Audio recording was stopped by another app (e.g., video or music playback).")
         }
     }
 
@@ -1041,7 +1062,6 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 userInfo: [AmbientNoiseSensor.EXTRA_ERROR: message]
             )
         }
-        sendProcessingErrorNotification(message)
     }
 
     private func sendProcessingErrorNotification(_ message: String) {
@@ -1059,8 +1079,8 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { return }
             let content = UNMutableNotificationContent()
-            content.title = "Audio processing stopped"
-            content.body = message
+            content.title = "Ambient noise recording stopped"
+            content.body = "\(message) Please open the app and restart the sensor."
             content.sound = .default
             let request = UNNotificationRequest(
                 identifier:
@@ -1129,8 +1149,56 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 self.isSuspended = false
                 self.interruptionResumeAttempt = 0
                 self.handleAudioProcessingError(
-                    "Audio processing did not resume after audio session interruption.")
+                    "Audio recording could not resume after an audio session interruption.")
             }
+        }
+    }
+
+    @objc private func handleRouteChange(notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
+              let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
+        else { return }
+
+        logAudioProcessingState("audio route changed reason=\(reason.rawValue)")
+
+        let previousInputUID = CONFIG.currentInputUID
+        updateCurrentMicrophoneInfo()
+        let newInputUID = CONFIG.currentInputUID
+
+        if previousInputUID != newInputUID {
+            DispatchQueue.main.async {
+                self.notificationCenter.post(
+                    name: .actionAwareAmbientNoiseMicrophoneChanged,
+                    object: self,
+                    userInfo: [AmbientNoiseSensor.EXTRA_PREVIOUS_INPUT_UID: previousInputUID]
+                )
+            }
+        }
+
+        // Defer to interruption handling when recovery is already in progress.
+        guard isSensorStarted, !isSuspended, !shouldResumeAfterInterruption else { return }
+
+        switch reason {
+        case .oldDeviceUnavailable:
+            if newInputUID.isEmpty {
+                handleAudioProcessingError(
+                    "The microphone was disconnected and no alternative input is available.")
+            } else {
+                logAudioProcessingState("input device removed; restarting with new route")
+                stopAudioProcessing(preserveAudioSession: true)
+                startSensor(allowBackgroundSessionStart: true)
+            }
+        case .newDeviceAvailable, .routeConfigurationChange, .categoryChange, .override:
+            logAudioProcessingState("audio route changed; restarting audio engine")
+            stopAudioProcessing(preserveAudioSession: true)
+            try? applyPreferredInput(AVAudioSession.sharedInstance())
+            startSensor(allowBackgroundSessionStart: true)
+        case .noSuitableRouteForCategory:
+            handleAudioProcessingError(
+                "No suitable audio input is available for the current audio category.")
+        default:
+            break
         }
     }
 
@@ -1181,6 +1249,11 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         if pendingStartAfterForeground {
             pendingStartAfterForeground = false
             logAudioProcessingState("retrying deferred audio session start")
+            startSensor()
+            return
+        }
+        if isUserRequestedRunning && !isAudioProcessingRunning {
+            logAudioProcessingState("auto-restarting sensor on foreground after interruption or failure")
             startSensor()
             return
         }
