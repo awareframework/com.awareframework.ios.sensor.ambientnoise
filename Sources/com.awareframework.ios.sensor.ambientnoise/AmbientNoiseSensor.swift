@@ -206,6 +206,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     private var hasAudioTap = false
     private var pendingStartAfterForeground = false
     private var shouldResumeAfterInterruption = false
+    private var interruptionResumeAttempt = 0
     private var audioAnalyzerSetupAttempt = 0
     private var pendingStopNotificationID: String?
     private var cachedApplicationState: UIApplication.State = .active
@@ -488,6 +489,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         isSensorStarted = false
         pendingStartAfterForeground = false
         shouldResumeAfterInterruption = false
+        interruptionResumeAttempt = 0
         cancelPendingStopNotification()
         logAudioProcessingState("stop requested")
         if shouldKeepAudioSessionAliveOnStop() {
@@ -1145,21 +1147,67 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         logAudioProcessingState("suspending audio processing for interruption")
         isSensorStarted = false
         pendingStartAfterForeground = false
-        // Minimal stop: remove the tap and stop the engine, but do NOT reset it and do NOT
-        // deactivate the audio session. For Siri/voice-to-text (shouldResume=true), the session
-        // remains valid after .ended so the engine can restart with installTap+start() only,
-        // without calling setCategory/setActive again — which avoids the background restriction
-        // that prevented recovery. For phone calls (shouldResume=false), handleInterruption
-        // performs audioEngine.reset() + isReadySessionCategory=false before restarting.
-        if hasAudioTap {
-            audioEngine.inputNode.removeTap(onBus: CONFIG.onBus)
-            hasAudioTap = false
-        }
-        audioEngine.stop()
+        // Preserve the audio session so that isReadySessionCategory stays true and startSensor
+        // can skip setCategory/setActive on restart — matching the upstream approach.
+        stopAudioProcessing(preserveAudioSession: true)
         // Schedule a notification with a delay so that brief interruptions (e.g. Siri) that
         // auto-resume within the window don't bother the user. The notification is cancelled
         // when the audio engine restarts successfully.
         scheduleStopNotification()
+    }
+
+    private func resumeAudioProcessingAfterInterruption() {
+        logAudioProcessingState("restarting after interruption")
+        startSensor(allowBackgroundSessionStart: true)
+    }
+
+    private func scheduleInterruptionResumeAttempt(delay: TimeInterval) {
+        interruptionResumeAttempt += 1
+        let attempt = interruptionResumeAttempt
+        logAudioProcessingState(
+            "scheduling interruption resume attempt=\(attempt) delay=\(delay)")
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard self.shouldResumeAfterInterruption else {
+                self.logAudioProcessingState(
+                    "interruption resume attempt=\(attempt) skipped: resume no longer pending")
+                return
+            }
+
+            self.logAudioProcessingState(
+                "running interruption resume attempt=\(attempt)")
+            self.resumeAudioProcessingAfterInterruption()
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                guard self.shouldResumeAfterInterruption else { return }
+
+                if self.isAudioProcessingRunning {
+                    self.logAudioProcessingState(
+                        "interruption resume completed attempt=\(attempt)")
+                    self.shouldResumeAfterInterruption = false
+                    self.isSuspended = false
+                    self.interruptionResumeAttempt = 0
+                    return
+                }
+
+                if attempt < 3 {
+                    self.logAudioProcessingState(
+                        "interruption resume attempt=\(attempt) did not restore audio; retrying")
+                    self.scheduleInterruptionResumeAttempt(delay: 3.0)
+                    return
+                }
+
+                self.logAudioProcessingState(
+                    "interruption resume failed after \(attempt) attempts")
+                self.shouldResumeAfterInterruption = false
+                self.isSuspended = false
+                self.interruptionResumeAttempt = 0
+                self.handleAudioProcessingError(
+                    "Audio recording could not resume after an audio session interruption.")
+                self.sendProcessingErrorNotification(
+                    "Audio recording was stopped by another app (e.g., video or music playback).")
+            }
+        }
     }
 
     @objc private func handleRouteChange(notification: Notification) {
@@ -1222,6 +1270,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             if !isSuspended {
                 shouldResumeAfterInterruption =
                     isSensorStarted || hasAudioTap || audioEngine.isRunning
+                interruptionResumeAttempt = 0
                 isSuspended = true
                 suspendAudioProcessingForInterruption()
             }
@@ -1229,68 +1278,21 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             logAudioProcessingState("audio session interruption ended")
             guard isSuspended || shouldResumeAfterInterruption else { return }
 
-            let shouldResume: Bool
+            var shouldResumeOption = false
             if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
-                shouldResume = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                    .contains(.shouldResume)
+                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+                shouldResumeOption = options.contains(.shouldResume)
+                logAudioProcessingState(
+                    shouldResumeOption
+                        ? "interruption ended with shouldResume (Siri / voice input)"
+                        : "interruption ended without shouldResume; will attempt resume"
+                )
             } else {
-                shouldResume = false
+                logAudioProcessingState(
+                    "interruption ended without resume options; will attempt resume")
             }
-            logAudioProcessingState(
-                shouldResume
-                    ? "interruption ended with shouldResume (Siri / voice input): reactivating session"
-                    : "interruption ended without shouldResume (phone call etc.): resetting session"
-            )
 
-            if shouldResume {
-                // Siri / voice-to-text: engine was stopped but not reset; session is still valid.
-                // Call setActive(true) directly — no requestRecordPermission callback needed
-                // (permission was already granted) and fixes the RemoteIO "outf 0 Hz" error.
-                // If the app is suspended before this fires or setActive fails, the stop
-                // notification (scheduled at .began) prompts the user to open the app, and
-                // handleDidBecomeActive restarts automatically when they do.
-                isSuspended = false
-                shouldResumeAfterInterruption = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    guard self.isUserRequestedRunning else { return }
-                    do {
-                        try AVAudioSession.sharedInstance().setActive(
-                            true, options: .notifyOthersOnDeactivation)
-                    } catch {
-                        if self.CONFIG.debug {
-                            print(AmbientNoiseSensor.TAG,
-                                  "setActive after Siri interruption failed:", error)
-                        }
-                        return
-                    }
-                    self.isReadySessionCategory = true
-                    self.isSensorStarted = true
-                    self.resetDutyCycle()
-                    self.updateCurrentMicrophoneInfo()
-                    self.logAudioProcessingState("restarting audio after Siri interruption")
-                    self.startAudioProcessing(inputNode: self.audioEngine.inputNode)
-                }
-            } else {
-                // Phone call / YouTube etc.: session was taken over.
-                // Reset the engine and force full session re-setup (setCategory + setActive).
-                audioEngine.reset()
-                isReadySessionCategory = false
-                isSuspended = false
-                shouldResumeAfterInterruption = false
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    guard self.isUserRequestedRunning else { return }
-                    self.startSensor(allowBackgroundSessionStart: true)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        guard self.isUserRequestedRunning, !self.isAudioProcessingRunning else {
-                            return
-                        }
-                        self.handleAudioProcessingError(
-                            "Audio recording could not resume after an audio session interruption.")
-                        self.sendProcessingErrorNotification(
-                            "Audio recording was stopped by another app (e.g., video or music playback).")
-                    }
-                }
-            }
+            scheduleInterruptionResumeAttempt(delay: shouldResumeOption ? 1.0 : 2.0)
         @unknown default:
             break
         }
