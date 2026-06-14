@@ -30,6 +30,8 @@ iOS 15 or later
 + `set(label:)`: Sets a custom label applied to all subsequent data points.
 + `availableMicrophoneInputs() -> [AmbientNoiseMicrophoneInput]`: Returns the list of available microphone inputs.
 + `refreshCurrentMicrophone()`: Updates the current microphone info in the config.
++ `applyRuntimeAudioConfiguration()`: Resets the duty cycle and rebuilds the stream analyzer with the current config without restarting the audio engine. Call this after changing config fields such as `activateAudioClassificationSensor` or `audioClassifierModelURL` while the sensor is running.
++ `currentDutyCycleStatus(now:) -> DutyCycleStatus?`: Returns the current duty cycle phase and timing information, or `nil` when duty cycle is disabled.
 
 ### AmbientNoiseSensor.Config
 
@@ -48,9 +50,16 @@ Class to hold the configuration of the sensor.
 + `dutyCycleEnabled: Bool`: Enable duty cycle processing control while keeping microphone recording active. (default = `true`)
 + `activeDuration: TimeInterval`: Processing duration for each duty cycle active phase, in seconds. (default = `60`)
 + `restDuration: TimeInterval`: Pause duration for each duty cycle rest phase, in seconds. Audio capture continues during rest. (default = `60`)
++ `dutyCycleExtensionEnabled: Bool`: Allow detected audio events to extend the active phase of the duty cycle. (default = `false`)
++ `extensionLabels: [String]`: Audio classification labels that trigger a duty cycle extension (case-insensitive, substring match). (default = `["speech", "conversation"]`)
++ `extensionConfidenceThreshold: Double`: Minimum confidence score [0.0–1.0] required for a label to trigger an extension. (default = `0.5`)
++ `noiseLevelExtensionEnabled: Bool`: Allow high ambient noise levels to extend the active phase of the duty cycle. (default = `false`)
++ `noiseLevelThreshold: Double`: Decibel threshold (dBFS) above which the duty cycle active phase is extended. (default = `-30.0`)
++ `extensionDuration: TimeInterval`: Duration in seconds by which the active phase is extended when a trigger condition is met. (default = `60`)
++ `processingFailureNotificationsEnabled: Bool`: Post a local user notification when audio processing fails. Notifications are rate-limited to at most one per minute. (default = `false`)
 + `preferredInputUID: String`: UID of the preferred microphone input. Leave empty to use the system default.
-+ `bufferSize: UInt32`: AVAudioEngine tap buffer size. (default = 8192)
-+ `onBus: Int`: Audio engine input bus. (default = 0)
++ `bufferSize: UInt32`: AVAudioEngine tap buffer size. (default = `16384`)
++ `onBus: Int`: Audio engine input bus. (default = `0`)
 + `enabled: Bool`: Sensor is enabled or not. (default = `false`)
 + `debug: Bool`: Enable/disable logging. (default = `false`)
 + `label: String`: Label for the data. (default = "")
@@ -79,6 +88,7 @@ For this reason, the sensor skips the audio classification model built into iOS 
 
 + `AmbientNoiseSensor.ACTION_AWARE_AMBIENT_NOISE`: fired when a new decibel measurement is recorded.
 + `AmbientNoiseSensor.ACTION_AWARE_AUDIO_LABEL`: fired when a new audio classification result is available.
++ `AmbientNoiseSensor.ACTION_AWARE_AUDIO_PROCESSING_ERROR`: fired when audio processing encounters an error. The error description is available in the `AmbientNoiseSensor.EXTRA_ERROR` field of the notification `userInfo`.
 
 ### Received Broadcasts
 
