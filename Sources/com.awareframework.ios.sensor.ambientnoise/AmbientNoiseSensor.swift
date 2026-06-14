@@ -208,6 +208,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     private var shouldResumeAfterInterruption = false
     private var audioAnalyzerSetupAttempt = 0
     private var interruptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
+    private var pendingStopNotificationID: String?
     private var cachedApplicationState: UIApplication.State = .active
     private let applicationStateLock = NSLock()
     private var loadedAudioClassifierModel: MLModel?
@@ -488,6 +489,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         isSensorStarted = false
         pendingStartAfterForeground = false
         shouldResumeAfterInterruption = false
+        cancelPendingStopNotification()
         logAudioProcessingState("stop requested")
         if shouldKeepAudioSessionAliveOnStop() {
             logAudioProcessingState("sensor stopped; keeping audio session alive in background")
@@ -693,6 +695,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         do {
             try audioEngine.start()
             logAudioProcessingState("audio engine started")
+            cancelPendingStopNotification()
         } catch {
             if CONFIG.debug { print(AmbientNoiseSensor.TAG, "AVAudioEngine start error:", error) }
             if hasAudioTap {
@@ -1105,6 +1108,34 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         }
     }
 
+    private func scheduleStopNotification() {
+        guard CONFIG.processingFailureNotificationsEnabled else { return }
+        let id = "com.awareframework.ios.sensor.ambientnoise.stopped.\(Int(Date().timeIntervalSince1970))"
+        pendingStopNotificationID = id
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
+            guard granted else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Ambient noise recording stopped"
+            content.body =
+                "Recording was interrupted by another app or system event. "
+                + "It will restart automatically if possible. "
+                + "Open the app to restart manually."
+            content.sound = .default
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 10, repeats: false)
+            let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+            center.add(request)
+        }
+    }
+
+    private func cancelPendingStopNotification() {
+        guard let id = pendingStopNotificationID else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        center.removeDeliveredNotifications(withIdentifiers: [id])
+        pendingStopNotificationID = nil
+    }
+
     // MARK: Interruption handling
 
     private var isAudioProcessingRunning: Bool {
@@ -1119,6 +1150,10 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         // audio session interruption — including Siri — before restarting the engine. Skipping
         // it leaves the RemoteIO output format at 0 Hz, causing engine start to fail.
         stopAudioProcessing()
+        // Schedule a notification with a delay so that brief interruptions (e.g. Siri) that
+        // auto-resume within the window don't bother the user. The notification is cancelled
+        // when the audio engine restarts successfully.
+        scheduleStopNotification()
     }
 
     @objc private func handleRouteChange(notification: Notification) {
