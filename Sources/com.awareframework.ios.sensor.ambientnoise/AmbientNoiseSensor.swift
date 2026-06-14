@@ -1182,17 +1182,17 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 shouldResumeAfterInterruption =
                     isSensorStarted || hasAudioTap || audioEngine.isRunning
                 isSuspended = true
-                // Request background execution time so the app stays alive to receive .ended
-                // and restart after the interruption. Without this, stopping the audio engine
-                // may cause iOS to suspend the app before .ended arrives.
-                DispatchQueue.main.async {
-                    if self.interruptionBackgroundTask == .invalid {
-                        self.interruptionBackgroundTask = UIApplication.shared.beginBackgroundTask(
-                            withName: "com.awareframework.ios.sensor.ambientnoise.interruption"
-                        ) {
-                            UIApplication.shared.endBackgroundTask(self.interruptionBackgroundTask)
-                            self.interruptionBackgroundTask = .invalid
-                        }
+                // AVAudioSession interruption notifications are always delivered on the main
+                // thread, so UIApplication.shared is safe to call directly here. Request the
+                // background task BEFORE stopping the engine: if we defer it asynchronously,
+                // iOS may suspend the app the moment audio I/O stops, before .ended arrives.
+                if interruptionBackgroundTask == .invalid {
+                    interruptionBackgroundTask = UIApplication.shared.beginBackgroundTask(
+                        withName: "com.awareframework.ios.sensor.ambientnoise.interruption"
+                    ) { [weak self] in
+                        guard let self else { return }
+                        UIApplication.shared.endBackgroundTask(self.interruptionBackgroundTask)
+                        self.interruptionBackgroundTask = .invalid
                     }
                 }
                 suspendAudioProcessingForInterruption()
@@ -1254,11 +1254,9 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     }
 
     private func endInterruptionBackgroundTask() {
-        DispatchQueue.main.async {
-            guard self.interruptionBackgroundTask != .invalid else { return }
-            UIApplication.shared.endBackgroundTask(self.interruptionBackgroundTask)
-            self.interruptionBackgroundTask = .invalid
-        }
+        guard interruptionBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(interruptionBackgroundTask)
+        interruptionBackgroundTask = .invalid
     }
 
     @objc private func handleDidBecomeActive() {
