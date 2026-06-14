@@ -1258,6 +1258,11 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             )
 
             if shouldResume {
+                // Siri / voice-to-text: engine was stopped but not reset; session is still valid.
+                // Call setActive(true) directly and synchronously here — no requestRecordPermission
+                // callback needed (permission was already granted). This avoids the async-callback
+                // race that prevented background restart, and fixes the RemoteIO "outf 0 Hz" error
+                // that occurs when the engine restarts without the session being reactivated.
                 isSuspended = false
                 shouldResumeAfterInterruption = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
@@ -1265,11 +1270,23 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                         self.endInterruptionBackgroundTask()
                         return
                     }
-                    self.startSensor(allowBackgroundSessionStart: true)
-                    // requestRecordPermission delivers its callback asynchronously on the main
-                    // thread, so ending the background task in the same block as startSensor
-                    // would terminate it before the callback fires. Delay long enough for
-                    // the permission callback and engine start to complete.
+                    do {
+                        try AVAudioSession.sharedInstance().setActive(
+                            true, options: .notifyOthersOnDeactivation)
+                    } catch {
+                        if self.CONFIG.debug {
+                            print(AmbientNoiseSensor.TAG,
+                                  "setActive after Siri interruption failed:", error)
+                        }
+                        self.endInterruptionBackgroundTask()
+                        return
+                    }
+                    self.isReadySessionCategory = true
+                    self.isSensorStarted = true
+                    self.resetDutyCycle()
+                    self.updateCurrentMicrophoneInfo()
+                    self.logAudioProcessingState("restarting audio after Siri interruption")
+                    self.startAudioProcessing(inputNode: self.audioEngine.inputNode)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
                         self.endInterruptionBackgroundTask()
                     }
