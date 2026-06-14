@@ -1147,10 +1147,17 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         logAudioProcessingState("suspending audio processing for interruption")
         isSensorStarted = false
         pendingStartAfterForeground = false
-        // Always perform a full stop: Apple requires setActive(true) to be called after any
-        // audio session interruption — including Siri — before restarting the engine. Skipping
-        // it leaves the RemoteIO output format at 0 Hz, causing engine start to fail.
-        stopAudioProcessing()
+        // Minimal stop: remove the tap and stop the engine, but do NOT reset it and do NOT
+        // deactivate the audio session. For Siri/voice-to-text (shouldResume=true), the session
+        // remains valid after .ended so the engine can restart with installTap+start() only,
+        // without calling setCategory/setActive again — which avoids the background restriction
+        // that prevented recovery. For phone calls (shouldResume=false), handleInterruption
+        // performs audioEngine.reset() + isReadySessionCategory=false before restarting.
+        if hasAudioTap {
+            audioEngine.inputNode.removeTap(onBus: CONFIG.onBus)
+            hasAudioTap = false
+        }
+        audioEngine.stop()
         // Schedule a notification with a delay so that brief interruptions (e.g. Siri) that
         // auto-resume within the window don't bother the user. The notification is cancelled
         // when the audio engine restarts successfully.
@@ -1268,7 +1275,9 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                     }
                 }
             } else {
-                // Phone call / YouTube etc.: session was taken over — force full re-setup.
+                // Phone call / YouTube etc.: session was taken over.
+                // Reset the engine and force full session re-setup (setCategory + setActive).
+                audioEngine.reset()
                 isReadySessionCategory = false
                 isSuspended = false
                 shouldResumeAfterInterruption = false
