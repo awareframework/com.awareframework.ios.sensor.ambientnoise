@@ -2,7 +2,7 @@
 
 [![Swift Package Manager compatible](https://img.shields.io/badge/Swift%20Package%20Manager-compatible-brightgreen.svg)](https://github.com/apple/swift-package-manager)
 
-This sensor module captures ambient sound levels (decibels) and classifies audio using Apple's SoundAnalysis framework. It provides two concurrent data streams: continuous decibel measurements and sound classification labels with confidence scores.
+This sensor module captures ambient sound levels (decibels) and classifies audio using Apple's SoundAnalysis framework with either a custom Core ML classifier or the audio classification model built into iOS. It provides two concurrent data streams: continuous decibel measurements and sound classification labels with confidence scores.
 
 ## Requirements
 iOS 15 or later
@@ -39,9 +39,15 @@ Class to hold the configuration of the sensor.
 
 + `sensorObserver: AmbientNoiseSensorObserver?`: Callback for live data updates.
 + `activateAmbientNoiseSensor: Bool`: Enable decibel measurement. (default = `true`)
-+ `activateAudioClassificationSensor: Bool`: Enable sound classification via SoundAnalysis. (default = `true`)
-+ `audioClassifierModel: MLModel?`: Custom Core ML classifier. Uses the built-in iOS classifier when `nil`. (default = `nil`)
++ `activateAudioClassificationSensor: Bool`: Enable sound classification via SoundAnalysis. (default = `false`)
++ `audioClassifierModel: MLModel?`: Custom Core ML classifier. If provided directly, load it with `MLModelConfiguration.computeUnits = .cpuOnly` when background classification is required. (default = `nil`)
++ `audioClassifierModelURL: URL?`: Custom Core ML classifier URL. When this is set, the sensor loads the model with `audioClassifierComputeUnits`. (default = `nil`)
++ `audioClassifierComputeUnits: MLComputeUnits`: Compute units used when loading `audioClassifierModelURL`. Defaults to `.cpuOnly`.
++ `useBuiltInAudioClassifier: Bool`: Use the audio classification model built into iOS when no custom model is configured. This mode is foreground-only. (default = `true`)
 + `storeOnlyTopK: Int?`: If set, only the top-K classifications by confidence are stored per analysis window. (default = `nil` = store all)
++ `dutyCycleEnabled: Bool`: Enable duty cycle processing control while keeping microphone recording active. (default = `true`)
++ `activeDuration: TimeInterval`: Processing duration for each duty cycle active phase, in seconds. (default = `60`)
++ `restDuration: TimeInterval`: Pause duration for each duty cycle rest phase, in seconds. Audio capture continues during rest. (default = `60`)
 + `preferredInputUID: String`: UID of the preferred microphone input. Leave empty to use the system default.
 + `bufferSize: UInt32`: AVAudioEngine tap buffer size. (default = 8192)
 + `onBus: Int`: Audio engine input bus. (default = 0)
@@ -53,6 +59,19 @@ Class to hold the configuration of the sensor.
 + `dbType: Engine`: Which db engine to use for saving data. (default = `Engine.DatabaseType.NONE`)
 + `dbPath: String`: Path of the database.
 + `dbHost: String`: Host for syncing the database. (default = `nil`)
+
+### Audio classifier model policy
+
+Audio label classification can use either a custom Core ML sound classifier or the audio classification model built into iOS.
+
+The audio classification model built into iOS can work while the app is in the foreground, but it may submit Metal/GPU work internally. iOS does not permit background apps to submit GPU work, so this classifier can fail in the background with errors such as:
+
+```text
+IOGPUMetalError: Insufficient Permission (to submit GPU work from background)
+CoreML prediction failed ... Failed to evaluate model ... in pipeline
+```
+
+For this reason, the sensor skips the audio classification model built into iOS while the app is not active. For background audio event detection, provide a custom classifier and load it with CPU-only compute units. This avoids the Metal background execution restriction, at the cost of higher CPU and battery usage.
 
 ## Broadcasts
 
@@ -107,7 +126,12 @@ import com_awareframework_ios_sensor_ambientnoise
 let sensor = AmbientNoiseSensor(AmbientNoiseSensor.Config().apply { config in
     config.sensorObserver = Observer()
     config.activateAmbientNoiseSensor = true
-    config.activateAudioClassificationSensor = true
+    config.activateAudioClassificationSensor = false
+    config.audioClassifierModelURL = Bundle.main.url(
+        forResource: "ConversationEventClassifier",
+        withExtension: "mlmodelc"
+    )
+    config.audioClassifierComputeUnits = .cpuOnly
     config.storeOnlyTopK = 3
     config.debug = true
 })

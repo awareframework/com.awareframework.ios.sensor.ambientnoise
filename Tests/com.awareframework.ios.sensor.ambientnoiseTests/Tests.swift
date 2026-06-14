@@ -6,7 +6,8 @@ final class AmbientNoiseSensorTests: XCTestCase {
     func testConfigDefaults() {
         let config = AmbientNoiseSensor.Config()
         XCTAssertTrue(config.activateAmbientNoiseSensor)
-        XCTAssertTrue(config.activateAudioClassificationSensor)
+        XCTAssertFalse(config.activateAudioClassificationSensor)
+        XCTAssertTrue(config.dutyCycleEnabled)
         XCTAssertNil(config.storeOnlyTopK)
     }
 
