@@ -490,6 +490,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         pendingStartAfterForeground = false
         shouldResumeAfterInterruption = false
         cancelPendingStopNotification()
+        endInterruptionBackgroundTask()
         logAudioProcessingState("stop requested")
         if shouldKeepAudioSessionAliveOnStop() {
             logAudioProcessingState("sensor stopped; keeping audio session alive in background")
@@ -1258,7 +1259,13 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                         return
                     }
                     self.startSensor(allowBackgroundSessionStart: true)
-                    self.endInterruptionBackgroundTask()
+                    // requestRecordPermission delivers its callback asynchronously on the main
+                    // thread, so ending the background task in the same block as startSensor
+                    // would terminate it before the callback fires. Delay long enough for
+                    // the permission callback and engine start to complete.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                        self.endInterruptionBackgroundTask()
+                    }
                 }
             } else {
                 // Phone call / YouTube etc.: session was taken over — force full re-setup.
