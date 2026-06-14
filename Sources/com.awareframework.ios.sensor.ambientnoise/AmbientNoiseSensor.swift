@@ -205,6 +205,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     private var isUserRequestedRunning = false
     private var hasAudioTap = false
     private var pendingStartAfterForeground = false
+    private var pendingInterruptionResumeAfterForeground = false
     private var shouldResumeAfterInterruption = false
     private var interruptionResumeAttempt = 0
     private var audioAnalyzerSetupAttempt = 0
@@ -218,6 +219,10 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     private var dutyCycleRestUntil: Date?
     private let dutyCycleLock = NSLock()
     private var lastProcessingErrorNotificationAt: Date?
+    private static let processingErrorNotificationID =
+        "com.awareframework.ios.sensor.ambientnoise.processing_error"
+    private static let stoppedNotificationID =
+        "com.awareframework.ios.sensor.ambientnoise.stopped"
 
     public var audioLabelSubSensor: AudioLabelSubSensor?
     public var ambientNoiseSubSensor: AmbientNoiseSubSensor?
@@ -416,6 +421,12 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(handleMediaServicesWereReset),
+            name: AVAudioSession.mediaServicesWereResetNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(handleDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification,
             object: nil
@@ -457,6 +468,11 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         )
         NotificationCenter.default.removeObserver(
             self,
+            name: AVAudioSession.mediaServicesWereResetNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        NotificationCenter.default.removeObserver(
+            self,
             name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
@@ -488,6 +504,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         isUserRequestedRunning = false
         isSensorStarted = false
         pendingStartAfterForeground = false
+        pendingInterruptionResumeAfterForeground = false
         shouldResumeAfterInterruption = false
         interruptionResumeAttempt = 0
         cancelPendingStopNotification()
@@ -556,7 +573,6 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
     public func availableMicrophoneInputs() -> [AmbientNoiseMicrophoneInput] {
         let audioSession = AVAudioSession.sharedInstance()
-        try? audioSession.setCategory(.record, mode: .default, options: [])
         return (audioSession.availableInputs ?? []).map { input in
             AmbientNoiseMicrophoneInput(
                 uid: input.uid,
@@ -576,6 +592,20 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         let audioSession = AVAudioSession.sharedInstance()
         logAudioProcessingState("startSensor requested")
         audioSession.requestRecordPermission { granted in
+            DispatchQueue.main.async {
+                self.startSensorAfterPermission(
+                    granted: granted,
+                    audioSession: audioSession,
+                    allowBackgroundSessionStart: allowBackgroundSessionStart)
+            }
+        }
+    }
+
+    private func startSensorAfterPermission(
+        granted: Bool,
+        audioSession: AVAudioSession,
+        allowBackgroundSessionStart: Bool
+    ) {
             guard granted else {
                 if self.CONFIG.debug {
                     print(AmbientNoiseSensor.TAG, "Microphone permission denied.")
@@ -590,14 +620,21 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 }
 
                 if !self.isReadySessionCategory {
-                    try audioSession.setCategory(.record, mode: .default, options: [])
-                    try self.applyPreferredInput(audioSession)
-                    try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+                    try self.configureAudioSessionForRecording(audioSession)
+                    try audioSession.setActive(true)
                     self.isReadySessionCategory = true
                 }
                 self.updateCurrentMicrophoneInfo()
             } catch {
                 if self.CONFIG.debug { print(AmbientNoiseSensor.TAG, error) }
+                self.logAudioProcessingState("audio session start failed: \(error)")
+                self.isSensorStarted = false
+                self.isReadySessionCategory = false
+                if self.isApplicationNotActive {
+                    self.pendingStartAfterForeground = true
+                    self.sendProcessingErrorNotification(
+                        "Audio recording was paused because the system audio session could not be restarted in the background.")
+                }
                 return
             }
 
@@ -610,7 +647,6 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 self.notificationCenter.post(name: .actionAwareAmbientNoiseStart, object: self)
                 if self.CONFIG.debug { print(AmbientNoiseSensor.TAG, "Sensor started.") }
             }
-        }
     }
 
     private func startAudioProcessing(inputNode: AVAudioInputNode) {
@@ -964,14 +1000,38 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     }
 
     private func applyPreferredInput(_ audioSession: AVAudioSession) throws {
-        guard CONFIG.preferredInputUID.isEmpty == false,
-            let preferredInput = audioSession.availableInputs?.first(where: {
-                $0.uid == CONFIG.preferredInputUID
-            })
-        else {
+        guard let preferredInput = preferredRecordingInput(audioSession) else {
             return
         }
         try audioSession.setPreferredInput(preferredInput)
+    }
+
+    private func preferredRecordingInput(_ audioSession: AVAudioSession) -> AVAudioSessionPortDescription? {
+        let availableInputs = audioSession.availableInputs ?? []
+        if CONFIG.preferredInputUID.isEmpty == false {
+            return availableInputs.first { $0.uid == CONFIG.preferredInputUID }
+        }
+
+        // For long-running background sensing, keep the device microphone stable by default.
+        // AirPods route changes can otherwise move input to Bluetooth HFP and destabilize
+        // background session recovery after Siri.
+        return availableInputs.first { $0.portType == .builtInMic }
+    }
+
+    private func configureAudioSessionForRecording(_ audioSession: AVAudioSession) throws {
+        try audioSession.setCategory(
+            .playAndRecord,
+            mode: .default,
+            options: recordingSessionOptions()
+        )
+        try applyPreferredInput(audioSession)
+    }
+
+    private func recordingSessionOptions() -> AVAudioSession.CategoryOptions {
+        if CONFIG.preferredInputUID.isEmpty {
+            return [.mixWithOthers]
+        }
+        return [.mixWithOthers, .allowBluetooth]
     }
 
     private func updateCurrentMicrophoneInfo() {
@@ -1063,6 +1123,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             "engineRunning=\(audioEngine.isRunning)",
             "sessionReady=\(isReadySessionCategory)",
             "pendingForegroundStart=\(pendingStartAfterForeground)",
+            "pendingForegroundInterruptionResume=\(pendingInterruptionResumeAfterForeground)",
             "shouldResumeAfterInterruption=\(shouldResumeAfterInterruption)",
             "analyzerReady=\(streamAnalyzer != nil)",
             "audioClassification=\(CONFIG.activateAudioClassificationSensor)",
@@ -1093,6 +1154,11 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         lastProcessingErrorNotificationAt = now
 
         let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(
+            withIdentifiers: [Self.stoppedNotificationID, Self.processingErrorNotificationID])
+        center.removeDeliveredNotifications(
+            withIdentifiers: [Self.stoppedNotificationID, Self.processingErrorNotificationID])
+        pendingStopNotificationID = nil
         center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { return }
             let content = UNMutableNotificationContent()
@@ -1100,8 +1166,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             content.body = "\(message) Please open the app and restart the sensor."
             content.sound = .default
             let request = UNNotificationRequest(
-                identifier:
-                    "com.awareframework.ios.sensor.ambientnoise.processing_error.\(Int(now.timeIntervalSince1970))",
+                identifier: Self.processingErrorNotificationID,
                 content: content,
                 trigger: nil
             )
@@ -1111,11 +1176,14 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
     private func scheduleStopNotification() {
         guard CONFIG.processingFailureNotificationsEnabled else { return }
-        let id = "com.awareframework.ios.sensor.ambientnoise.stopped.\(Int(Date().timeIntervalSince1970))"
+        if pendingStopNotificationID != nil { return }
+        let id = Self.stoppedNotificationID
         pendingStopNotificationID = id
         let center = UNUserNotificationCenter.current()
-        center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
-            guard granted else { return }
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        center.removeDeliveredNotifications(withIdentifiers: [id])
+        center.requestAuthorization(options: [.alert, .sound]) { [weak self] granted, _ in
+            guard granted, self?.pendingStopNotificationID == id else { return }
             let content = UNMutableNotificationContent()
             content.title = "Ambient noise recording stopped"
             content.body =
@@ -1137,6 +1205,15 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         pendingStopNotificationID = nil
     }
 
+    private func finishInterruptionRecoveryIfRunning() -> Bool {
+        guard isAudioProcessingRunning else { return false }
+        logAudioProcessingState("interruption resume completed")
+        shouldResumeAfterInterruption = false
+        isSuspended = false
+        interruptionResumeAttempt = 0
+        return true
+    }
+
     // MARK: Interruption handling
 
     private var isAudioProcessingRunning: Bool {
@@ -1147,6 +1224,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         logAudioProcessingState("suspending audio for interruption (soft stop)")
         isSensorStarted = false
         pendingStartAfterForeground = false
+        pendingInterruptionResumeAfterForeground = false
         // Soft stop: halt the engine but do NOT remove the tap or call audioEngine.reset().
         // Keeping the tap and session alive lets resumeAudioProcessingAfterInterruption
         // restart with just setActive(true) + audioEngine.start(), which is fully
@@ -1154,10 +1232,25 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         if audioEngine.isRunning {
             audioEngine.stop()
         }
-        // Schedule a notification with a delay so that brief interruptions (e.g. Siri) that
-        // auto-resume within the window don't bother the user. The notification is cancelled
-        // when the audio engine restarts successfully.
-        scheduleStopNotification()
+        cancelPendingStopNotification()
+    }
+
+    @discardableResult
+    private func startAudioEngineFastPathAfterInterruption(_ context: String) -> Bool {
+        guard hasAudioTap else { return false }
+
+        do {
+            isSensorStarted = true
+            try audioEngine.start()
+            logAudioProcessingState("audio engine restarted after interruption (\(context))")
+            cancelPendingStopNotification()
+            notificationCenter.post(name: .actionAwareAmbientNoiseStart, object: self)
+            return true
+        } catch {
+            isSensorStarted = false
+            logAudioProcessingState("engine restart failed (\(context)): \(error)")
+            return false
+        }
     }
 
     private func resumeAudioProcessingAfterInterruption() {
@@ -1170,46 +1263,33 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         // the app before the dispatch). Permission was already granted at start time.
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            if !isReadySessionCategory {
-                try audioSession.setCategory(.record, mode: .default, options: [])
-                try applyPreferredInput(audioSession)
-            }
-            // iOS deactivates the session during interruption even when the engine was only
-            // stopped (not reset). Reactivate explicitly before restarting the engine.
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+            try configureAudioSessionForRecording(audioSession)
+            // Match AVAudioSession's recommended interruption recovery order:
+            // reactivate the session first, then restart the already configured engine.
+            try audioSession.setActive(true)
             isReadySessionCategory = true
             logAudioProcessingState("audio session reactivated for interruption resume")
         } catch {
             logAudioProcessingState("setActive(true) failed for interruption resume: \(error)")
-            // Remove stale tap so the retry goes through full startAudioProcessing.
-            if hasAudioTap {
-                audioEngine.inputNode.removeTap(onBus: CONFIG.onBus)
-                hasAudioTap = false
-                audioEngine.reset()
+            isSensorStarted = false
+            if isApplicationNotActive {
+                pendingInterruptionResumeAfterForeground = true
+                logAudioProcessingState(
+                    "deferring interruption resume until foreground because session activation is unavailable in background")
+                sendProcessingErrorNotification(
+                    "Audio recording was paused by Siri or another system audio interruption.")
+                return
             }
+            removeStaleAudioTapAfterInterruption()
             isReadySessionCategory = false
             return
         }
 
-        if hasAudioTap {
-            // Fast path: suspendAudioProcessingForInterruption did a soft stop (no reset,
-            // tap still installed). Just restart the engine — no format negotiation needed.
-            do {
-                isSensorStarted = true
-                try audioEngine.start()
-                logAudioProcessingState("audio engine restarted after interruption (fast path)")
-                cancelPendingStopNotification()
-                notificationCenter.post(name: .actionAwareAmbientNoiseStart, object: self)
-                return
-            } catch {
-                logAudioProcessingState(
-                    "engine restart failed (fast path): \(error); falling back to full restart")
-                audioEngine.inputNode.removeTap(onBus: CONFIG.onBus)
-                hasAudioTap = false
-                audioEngine.reset()
-                isSensorStarted = false
-            }
+        if startAudioEngineFastPathAfterInterruption("fast path after session activation") {
+            return
         }
+
+        removeStaleAudioTapAfterInterruption()
 
         // Full restart path (tap was absent or fast-path failed).
         isSensorStarted = true
@@ -1241,12 +1321,13 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
             // resumeAudioProcessingAfterInterruption is synchronous, so isAudioProcessingRunning
             // reflects the result of this attempt immediately.
-            if self.isAudioProcessingRunning {
+            if self.finishInterruptionRecoveryIfRunning() {
+                return
+            }
+
+            if self.pendingInterruptionResumeAfterForeground {
                 self.logAudioProcessingState(
-                    "interruption resume completed attempt=\(attempt)")
-                self.shouldResumeAfterInterruption = false
-                self.isSuspended = false
-                self.interruptionResumeAttempt = 0
+                    "interruption resume attempt=\(attempt) deferred until foreground")
                 return
             }
 
@@ -1264,12 +1345,55 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             self.interruptionResumeAttempt = 0
             self.handleAudioProcessingError(
                 "Audio recording could not resume after an audio session interruption.")
-            self.sendProcessingErrorNotification(
-                "Audio recording was stopped by another app (e.g., video or music playback).")
+            if self.pendingInterruptionResumeAfterForeground {
+                self.logAudioProcessingState(
+                    "suppressed interruption failure notification because foreground restart is pending")
+            } else {
+                self.sendProcessingErrorNotification(
+                    "Audio recording was stopped by another app (e.g., video or music playback).")
+            }
         }
     }
 
+    private func removeStaleAudioTapAfterInterruption() {
+        guard hasAudioTap else { return }
+        audioEngine.inputNode.removeTap(onBus: CONFIG.onBus)
+        hasAudioTap = false
+        audioEngine.reset()
+    }
+
+    private func rebuildAudioEngineAfterMediaServicesReset() {
+        logAudioProcessingState("rebuilding audio engine after media services reset")
+
+        streamAnalyzer?.removeAllRequests()
+        streamAnalyzer = nil
+        audioAnalyzerSetupAttempt = 0
+
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+        if hasAudioTap {
+            audioEngine.inputNode.removeTap(onBus: CONFIG.onBus)
+            hasAudioTap = false
+        }
+        audioEngine.reset()
+        audioEngine = AVAudioEngine()
+
+        isReadySessionCategory = false
+        isSensorStarted = false
+        isSuspended = false
+        shouldResumeAfterInterruption = false
+        interruptionResumeAttempt = 0
+        pendingStartAfterForeground = false
+        pendingInterruptionResumeAfterForeground = false
+        cancelPendingStopNotification()
+    }
+
     @objc private func handleRouteChange(notification: Notification) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.handleRouteChange(notification: notification) }
+            return
+        }
         guard let userInfo = notification.userInfo,
               let reasonValue = userInfo[AVAudioSessionRouteChangeReasonKey] as? UInt,
               let reason = AVAudioSession.RouteChangeReason(rawValue: reasonValue)
@@ -1294,6 +1418,12 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         // Defer to interruption handling when recovery is already in progress.
         guard isSensorStarted, !isSuspended, !shouldResumeAfterInterruption else { return }
 
+        if shouldKeepRunningAfterBackgroundRouteChange(reason: reason) {
+            logAudioProcessingState(
+                "audio route changed while running in background; keeping current engine")
+            return
+        }
+
         switch reason {
         case .oldDeviceUnavailable:
             if newInputUID.isEmpty {
@@ -1302,12 +1432,18 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             } else {
                 logAudioProcessingState("input device removed; restarting with new route")
                 stopAudioProcessing(preserveAudioSession: true)
+                isReadySessionCategory = false
                 startSensor(allowBackgroundSessionStart: true)
             }
-        case .newDeviceAvailable, .routeConfigurationChange, .categoryChange, .override:
+        case .categoryChange, .override:
+            logAudioProcessingState("audio route changed by session configuration; keeping current engine")
+        case .newDeviceAvailable:
+            logAudioProcessingState("input device became available; keeping preferred recording route")
+            applyPreferredRecordingInputIfPossible()
+        case .routeConfigurationChange:
             logAudioProcessingState("audio route changed; restarting audio engine")
             stopAudioProcessing(preserveAudioSession: true)
-            try? applyPreferredInput(AVAudioSession.sharedInstance())
+            isReadySessionCategory = false
             startSensor(allowBackgroundSessionStart: true)
         case .noSuitableRouteForCategory:
             handleAudioProcessingError(
@@ -1317,7 +1453,58 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         }
     }
 
+    private func shouldKeepRunningAfterBackgroundRouteChange(
+        reason: AVAudioSession.RouteChangeReason
+    ) -> Bool {
+        guard isApplicationNotActive, isAudioProcessingRunning else { return false }
+
+        switch reason {
+        case .categoryChange, .routeConfigurationChange, .override, .newDeviceAvailable:
+            return true
+        case .oldDeviceUnavailable:
+            return CONFIG.currentInputUID.isEmpty == false
+        default:
+            return false
+        }
+    }
+
+    private func applyPreferredRecordingInputIfPossible() {
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try applyPreferredInput(audioSession)
+            updateCurrentMicrophoneInfo()
+        } catch {
+            if CONFIG.debug {
+                print(AmbientNoiseSensor.TAG, "Failed to apply preferred input: \(error)")
+            }
+        }
+    }
+
+    @objc private func handleMediaServicesWereReset(notification: Notification) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.handleMediaServicesWereReset(notification: notification) }
+            return
+        }
+        let shouldRestart = isUserRequestedRunning
+        logAudioProcessingState("media services were reset")
+        rebuildAudioEngineAfterMediaServicesReset()
+
+        guard shouldRestart else { return }
+        if isApplicationNotActive {
+            pendingStartAfterForeground = true
+            logAudioProcessingState("restarting audio after media services reset in background")
+            startSensor(allowBackgroundSessionStart: true)
+        } else {
+            logAudioProcessingState("restarting audio after media services reset")
+            startSensor()
+        }
+    }
+
     @objc private func handleInterruption(notification: Notification) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { self.handleInterruption(notification: notification) }
+            return
+        }
         guard let userInfo = notification.userInfo,
             let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
             let type = AVAudioSession.InterruptionType(rawValue: typeValue)
@@ -1337,38 +1524,44 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             logAudioProcessingState("audio session interruption ended")
             guard isSuspended || shouldResumeAfterInterruption else { return }
 
-            var shouldResumeOption = false
-            if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
-                let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-                shouldResumeOption = options.contains(.shouldResume)
+            guard let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt else {
                 logAudioProcessingState(
-                    shouldResumeOption
-                        ? "interruption ended with shouldResume (Siri / voice input)"
-                        : "interruption ended without shouldResume; will attempt resume"
-                )
-            } else {
-                logAudioProcessingState(
-                    "interruption ended without resume options; will attempt resume")
+                    "interruption ended without resume options; deferring restart")
+                shouldResumeAfterInterruption = true
+                isSuspended = true
+                pendingStartAfterForeground = isApplicationNotActive
+                return
             }
 
-            if shouldResumeOption {
-                // Siri/voice-input: resume synchronously inside this notification callback.
-                // asyncAfter loses the execution window — the OS can suspend the app before
-                // the block fires, and requestRecordPermission (used in startSensor) is also
-                // async so it suffers the same fate. Calling directly here is safe because
-                // AVAudioSession notifications always arrive on the main thread and
-                // resumeAudioProcessingAfterInterruption is entirely synchronous.
-                isSuspended = false
-                shouldResumeAfterInterruption = false
-                resumeAudioProcessingAfterInterruption()
-                if !isAudioProcessingRunning {
-                    shouldResumeAfterInterruption = true
-                    interruptionResumeAttempt = 0
-                    scheduleInterruptionResumeAttempt(delay: 3.0)
-                }
-            } else {
-                scheduleInterruptionResumeAttempt(delay: 2.0)
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+            guard options.contains(.shouldResume) else {
+                logAudioProcessingState(
+                    "interruption ended without shouldResume; deferring restart")
+                shouldResumeAfterInterruption = true
+                isSuspended = true
+                pendingStartAfterForeground = isApplicationNotActive
+                return
             }
+
+            logAudioProcessingState(
+                "interruption ended with shouldResume (Siri / voice input)")
+            logAudioProcessingState("attempting immediate interruption resume")
+
+            // Resume synchronously while this notification callback is still executing.
+            resumeAudioProcessingAfterInterruption()
+            if finishInterruptionRecoveryIfRunning() {
+                return
+            }
+
+            if pendingInterruptionResumeAfterForeground {
+                logAudioProcessingState("waiting for foreground to resume after interruption")
+                return
+            }
+
+            shouldResumeAfterInterruption = true
+            isSuspended = true
+            interruptionResumeAttempt = 0
+            scheduleInterruptionResumeAttempt(delay: 3.0)
         @unknown default:
             break
         }
@@ -1377,6 +1570,16 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     @objc private func handleDidBecomeActive() {
         updateCachedApplicationState(.active)
         logAudioProcessingState("didBecomeActive received")
+        if pendingInterruptionResumeAfterForeground {
+            pendingInterruptionResumeAfterForeground = false
+            pendingStartAfterForeground = false
+            logAudioProcessingState("restarting audio after deferred interruption resume")
+            stopAudioProcessing()
+            isSuspended = false
+            shouldResumeAfterInterruption = false
+            startSensor()
+            return
+        }
         if pendingStartAfterForeground {
             pendingStartAfterForeground = false
             logAudioProcessingState("retrying deferred audio session start")
