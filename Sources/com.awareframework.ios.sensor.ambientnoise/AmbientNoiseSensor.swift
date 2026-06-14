@@ -1157,7 +1157,21 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     }
 
     private func resumeAudioProcessingAfterInterruption() {
-        logAudioProcessingState("restarting after interruption")
+        // The audio session category is still configured (preserveAudioSession was true when
+        // we suspended), but iOS deactivated the session during the interruption.
+        // Reactivate it explicitly so RemoteIO can initialize its output format — without
+        // this, audioEngine.start() fails with "outf< 2 ch, 0 Hz>" and error 560557684.
+        // On failure we clear isReadySessionCategory so startSensor falls back to the full
+        // setup path on this attempt (setCategory + setActive via requestRecordPermission).
+        do {
+            try AVAudioSession.sharedInstance().setActive(
+                true, options: .notifyOthersOnDeactivation)
+            logAudioProcessingState("audio session reactivated for interruption resume")
+        } catch {
+            logAudioProcessingState(
+                "setActive(true) failed for interruption resume: \(error); falling back to full setup")
+            isReadySessionCategory = false
+        }
         startSensor(allowBackgroundSessionStart: true)
     }
 
