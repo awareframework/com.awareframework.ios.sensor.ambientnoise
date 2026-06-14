@@ -1144,12 +1144,16 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     }
 
     private func suspendAudioProcessingForInterruption() {
-        logAudioProcessingState("suspending audio processing for interruption")
+        logAudioProcessingState("suspending audio for interruption (soft stop)")
         isSensorStarted = false
         pendingStartAfterForeground = false
-        // Preserve the audio session so that isReadySessionCategory stays true and startSensor
-        // can skip setCategory/setActive on restart — matching the upstream approach.
-        stopAudioProcessing(preserveAudioSession: true)
+        // Soft stop: halt the engine but do NOT remove the tap or call audioEngine.reset().
+        // Keeping the tap and session alive lets resumeAudioProcessingAfterInterruption
+        // restart with just setActive(true) + audioEngine.start(), which is fully
+        // synchronous and avoids the outf 0 Hz error caused by reset().
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
         // Schedule a notification with a delay so that brief interruptions (e.g. Siri) that
         // auto-resume within the window don't bother the user. The notification is cancelled
         // when the audio engine restarts successfully.
@@ -1158,36 +1162,62 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
     private func resumeAudioProcessingAfterInterruption() {
         guard isUserRequestedRunning else {
-            logAudioProcessingState("interruption resume skipped: sensor stopped by user")
+            logAudioProcessingState("interruption resume skipped: stopped by user")
             return
         }
 
-        // Bypass requestRecordPermission (which dispatches asynchronously and therefore cannot
-        // fire if the OS suspends the app before the callback is scheduled). Permission was
-        // already granted when we started recording — reactivate the session directly instead.
+        // Bypass requestRecordPermission (async callback — cannot fire if the OS suspends
+        // the app before the dispatch). Permission was already granted at start time.
         let audioSession = AVAudioSession.sharedInstance()
         do {
             if !isReadySessionCategory {
                 try audioSession.setCategory(.record, mode: .default, options: [])
                 try applyPreferredInput(audioSession)
             }
-            // iOS deactivates the session during interruption even when preserveAudioSession
-            // was true, causing RemoteIO outf 0 Hz. Always reactivate explicitly.
+            // iOS deactivates the session during interruption even when the engine was only
+            // stopped (not reset). Reactivate explicitly before restarting the engine.
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
             isReadySessionCategory = true
+            logAudioProcessingState("audio session reactivated for interruption resume")
         } catch {
-            logAudioProcessingState("audio session reactivation failed: \(error)")
+            logAudioProcessingState("setActive(true) failed for interruption resume: \(error)")
+            // Remove stale tap so the retry goes through full startAudioProcessing.
+            if hasAudioTap {
+                audioEngine.inputNode.removeTap(onBus: CONFIG.onBus)
+                hasAudioTap = false
+                audioEngine.reset()
+            }
             isReadySessionCategory = false
             return
         }
 
+        if hasAudioTap {
+            // Fast path: suspendAudioProcessingForInterruption did a soft stop (no reset,
+            // tap still installed). Just restart the engine — no format negotiation needed.
+            do {
+                isSensorStarted = true
+                try audioEngine.start()
+                logAudioProcessingState("audio engine restarted after interruption (fast path)")
+                cancelPendingStopNotification()
+                notificationCenter.post(name: .actionAwareAmbientNoiseStart, object: self)
+                return
+            } catch {
+                logAudioProcessingState(
+                    "engine restart failed (fast path): \(error); falling back to full restart")
+                audioEngine.inputNode.removeTap(onBus: CONFIG.onBus)
+                hasAudioTap = false
+                audioEngine.reset()
+                isSensorStarted = false
+            }
+        }
+
+        // Full restart path (tap was absent or fast-path failed).
         isSensorStarted = true
         pendingStartAfterForeground = false
         resetDutyCycle()
         updateCurrentMicrophoneInfo()
-        logAudioProcessingState("starting audio processing after interruption")
+        logAudioProcessingState("starting audio processing after interruption (full path)")
         startAudioProcessing(inputNode: audioEngine.inputNode)
-
         if isAudioProcessingRunning {
             notificationCenter.post(name: .actionAwareAmbientNoiseStart, object: self)
         }
