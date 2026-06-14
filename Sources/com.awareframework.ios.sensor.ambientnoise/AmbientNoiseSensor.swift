@@ -207,7 +207,6 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     private var pendingStartAfterForeground = false
     private var shouldResumeAfterInterruption = false
     private var audioAnalyzerSetupAttempt = 0
-    private var interruptionBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     private var pendingStopNotificationID: String?
     private var cachedApplicationState: UIApplication.State = .active
     private let applicationStateLock = NSLock()
@@ -490,7 +489,6 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         pendingStartAfterForeground = false
         shouldResumeAfterInterruption = false
         cancelPendingStopNotification()
-        endInterruptionBackgroundTask()
         logAudioProcessingState("stop requested")
         if shouldKeepAudioSessionAliveOnStop() {
             logAudioProcessingState("sensor stopped; keeping audio session alive in background")
@@ -1225,19 +1223,6 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 shouldResumeAfterInterruption =
                     isSensorStarted || hasAudioTap || audioEngine.isRunning
                 isSuspended = true
-                // AVAudioSession interruption notifications are always delivered on the main
-                // thread, so UIApplication.shared is safe to call directly here. Request the
-                // background task BEFORE stopping the engine: if we defer it asynchronously,
-                // iOS may suspend the app the moment audio I/O stops, before .ended arrives.
-                if interruptionBackgroundTask == .invalid {
-                    interruptionBackgroundTask = UIApplication.shared.beginBackgroundTask(
-                        withName: "com.awareframework.ios.sensor.ambientnoise.interruption"
-                    ) { [weak self] in
-                        guard let self else { return }
-                        UIApplication.shared.endBackgroundTask(self.interruptionBackgroundTask)
-                        self.interruptionBackgroundTask = .invalid
-                    }
-                }
                 suspendAudioProcessingForInterruption()
             }
         case .ended:
@@ -1259,17 +1244,15 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
             if shouldResume {
                 // Siri / voice-to-text: engine was stopped but not reset; session is still valid.
-                // Call setActive(true) directly and synchronously here — no requestRecordPermission
-                // callback needed (permission was already granted). This avoids the async-callback
-                // race that prevented background restart, and fixes the RemoteIO "outf 0 Hz" error
-                // that occurs when the engine restarts without the session being reactivated.
+                // Call setActive(true) directly — no requestRecordPermission callback needed
+                // (permission was already granted) and fixes the RemoteIO "outf 0 Hz" error.
+                // If the app is suspended before this fires or setActive fails, the stop
+                // notification (scheduled at .began) prompts the user to open the app, and
+                // handleDidBecomeActive restarts automatically when they do.
                 isSuspended = false
                 shouldResumeAfterInterruption = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    guard self.isUserRequestedRunning else {
-                        self.endInterruptionBackgroundTask()
-                        return
-                    }
+                    guard self.isUserRequestedRunning else { return }
                     do {
                         try AVAudioSession.sharedInstance().setActive(
                             true, options: .notifyOthersOnDeactivation)
@@ -1278,7 +1261,6 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                             print(AmbientNoiseSensor.TAG,
                                   "setActive after Siri interruption failed:", error)
                         }
-                        self.endInterruptionBackgroundTask()
                         return
                     }
                     self.isReadySessionCategory = true
@@ -1287,9 +1269,6 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                     self.updateCurrentMicrophoneInfo()
                     self.logAudioProcessingState("restarting audio after Siri interruption")
                     self.startAudioProcessing(inputNode: self.audioEngine.inputNode)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
-                        self.endInterruptionBackgroundTask()
-                    }
                 }
             } else {
                 // Phone call / YouTube etc.: session was taken over.
@@ -1299,13 +1278,9 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 isSuspended = false
                 shouldResumeAfterInterruption = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    guard self.isUserRequestedRunning else {
-                        self.endInterruptionBackgroundTask()
-                        return
-                    }
+                    guard self.isUserRequestedRunning else { return }
                     self.startSensor(allowBackgroundSessionStart: true)
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        self.endInterruptionBackgroundTask()
                         guard self.isUserRequestedRunning, !self.isAudioProcessingRunning else {
                             return
                         }
@@ -1319,12 +1294,6 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         @unknown default:
             break
         }
-    }
-
-    private func endInterruptionBackgroundTask() {
-        guard interruptionBackgroundTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(interruptionBackgroundTask)
-        interruptionBackgroundTask = .invalid
     }
 
     @objc private func handleDidBecomeActive() {
