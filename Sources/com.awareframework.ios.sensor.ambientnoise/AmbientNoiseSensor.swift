@@ -197,6 +197,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     @Published public var audioClasses = [AudioClassPoint]()
 
     var streamAnalyzer: SNAudioStreamAnalyzer?
+    private var streamAnalyzerFormatKey: String?
     var analysisQueue: DispatchQueue!
 
     private var isSuspended = false
@@ -651,7 +652,22 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
     private func startAudioProcessing(inputNode: AVAudioInputNode) {
         guard !hasAudioTap else {
-            logAudioProcessingState("startAudioProcessing skipped because tap already exists")
+            guard !audioEngine.isRunning else {
+                logAudioProcessingState("startAudioProcessing skipped because tap already exists")
+                return
+            }
+            do {
+                isSensorStarted = true
+                try audioEngine.start()
+                logAudioProcessingState("audio engine restarted with existing tap")
+                cancelPendingStopNotification()
+            } catch {
+                isSensorStarted = false
+                logAudioProcessingState(
+                    "engine restart failed with existing tap: \(error)")
+                removeStaleAudioTapAfterInterruption()
+                isReadySessionCategory = false
+            }
             return
         }
 
@@ -673,17 +689,22 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             return
         }
 
-        prepareStreamAnalyzer(inputFormat: inputFormat)
+        streamAnalyzer?.removeAllRequests()
+        streamAnalyzer = nil
+        streamAnalyzerFormatKey = nil
+        knownClassifications = nil
 
         inputNode.installTap(
-            onBus: CONFIG.onBus, bufferSize: CONFIG.bufferSize, format: inputFormat
+            onBus: CONFIG.onBus, bufferSize: CONFIG.bufferSize, format: nil
         ) { buffer, when in
             guard self.isSensorStarted else { return }
             guard self.shouldProcessAudio() else { return }
 
             if self.shouldAnalyzeAudioLabels() {
                 self.analysisQueue.async {
+                    guard self.isSensorStarted else { return }
                     guard self.shouldAnalyzeAudioLabels() else { return }
+                    self.prepareStreamAnalyzerIfNeeded(inputFormat: buffer.format)
                     self.streamAnalyzer?.analyze(buffer, atAudioFramePosition: when.sampleTime)
                 }
             }
@@ -749,6 +770,28 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         }
     }
 
+    private func prepareStreamAnalyzerIfNeeded(inputFormat: AVAudioFormat) {
+        guard !shouldDeferBuiltInAudioClassifierSetup() else {
+            return
+        }
+        let formatKey = analyzerFormatKey(inputFormat)
+        guard streamAnalyzer == nil || streamAnalyzerFormatKey != formatKey else {
+            return
+        }
+        prepareStreamAnalyzer(inputFormat: inputFormat)
+    }
+
+    private func shouldDeferBuiltInAudioClassifierSetup() -> Bool {
+        isApplicationNotActive
+            && CONFIG.useBuiltInAudioClassifier
+            && CONFIG.audioClassifierModel == nil
+            && CONFIG.audioClassifierModelURL == nil
+    }
+
+    private func analyzerFormatKey(_ format: AVAudioFormat) -> String {
+        "\(format.sampleRate)-\(format.channelCount)-\(format.commonFormat.rawValue)"
+    }
+
     private func prepareStreamAnalyzer(inputFormat: AVAudioFormat) {
         audioAnalyzerSetupAttempt += 1
         let attempt = audioAnalyzerSetupAttempt
@@ -762,7 +805,9 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         }
 
         guard CONFIG.activateAudioClassificationSensor else {
+            streamAnalyzer?.removeAllRequests()
             streamAnalyzer = nil
+            streamAnalyzerFormatKey = nil
             knownClassifications = nil
             logAudioProcessingState(
                 "skipped SNAudioStreamAnalyzer because audio classification is disabled attempt=\(attempt)"
@@ -771,11 +816,16 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         }
 
         do {
+            streamAnalyzer?.removeAllRequests()
+            streamAnalyzer = nil
+            streamAnalyzerFormatKey = nil
+            knownClassifications = nil
+
             let request: SNClassifySoundRequest
             if let model = try audioClassifierModelForRequest() {
                 logAudioProcessingState("creating SNAudioStreamAnalyzer attempt=\(attempt)")
                 streamAnalyzer = SNAudioStreamAnalyzer(format: inputFormat)
-                knownClassifications = nil
+                streamAnalyzerFormatKey = analyzerFormatKey(inputFormat)
                 logAudioProcessingState("created SNAudioStreamAnalyzer attempt=\(attempt)")
 
                 logAudioProcessingState(
@@ -785,6 +835,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             } else if CONFIG.useBuiltInAudioClassifier {
                 guard !isApplicationNotActive else {
                     streamAnalyzer = nil
+                    streamAnalyzerFormatKey = nil
                     knownClassifications = nil
                     logAudioProcessingState(
                         "deferred audio classification model built into iOS setup while app is not active attempt=\(attempt)"
@@ -794,7 +845,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
                 logAudioProcessingState("creating SNAudioStreamAnalyzer attempt=\(attempt)")
                 streamAnalyzer = SNAudioStreamAnalyzer(format: inputFormat)
-                knownClassifications = nil
+                streamAnalyzerFormatKey = analyzerFormatKey(inputFormat)
                 logAudioProcessingState("created SNAudioStreamAnalyzer attempt=\(attempt)")
 
                 logAudioProcessingState(
@@ -803,6 +854,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 request = try SNClassifySoundRequest(classifierIdentifier: .version1)
             } else {
                 streamAnalyzer = nil
+                streamAnalyzerFormatKey = nil
                 knownClassifications = nil
                 logAudioProcessingState(
                     "skipped SNAudioStreamAnalyzer because no audio classifier model is configured attempt=\(attempt)"
@@ -817,7 +869,9 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             try streamAnalyzer?.add(request, withObserver: self)
             logAudioProcessingState("added SNClassifySoundRequest attempt=\(attempt)")
         } catch {
+            streamAnalyzer?.removeAllRequests()
             streamAnalyzer = nil
+            streamAnalyzerFormatKey = nil
             if CONFIG.debug {
                 print(
                     AmbientNoiseSensor.TAG,
@@ -845,6 +899,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             logAudioProcessingState("removing audio classification request from runtime configuration")
             streamAnalyzer?.removeAllRequests()
             knownClassifications = nil
+            streamAnalyzerFormatKey = nil
         }
     }
 
@@ -1022,16 +1077,30 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         try audioSession.setCategory(
             .playAndRecord,
             mode: .default,
-            options: recordingSessionOptions()
+            options: recordingSessionOptions(audioSession)
         )
         try applyPreferredInput(audioSession)
     }
 
-    private func recordingSessionOptions() -> AVAudioSession.CategoryOptions {
-        if CONFIG.preferredInputUID.isEmpty {
-            return [.mixWithOthers]
+    private func recordingSessionOptions(
+        _ audioSession: AVAudioSession
+    ) -> AVAudioSession.CategoryOptions {
+        // Keep Bluetooth media output on A2DP when recording from the iPhone mic.
+        // Enabling .allowBluetooth permits HFP input/output, which can degrade media playback
+        // quality on AirPods during long-running sensing.
+        guard usesBluetoothRecordingInput(audioSession) else {
+            return [.mixWithOthers, .allowBluetoothA2DP]
         }
         return [.mixWithOthers, .allowBluetooth]
+    }
+
+    private func usesBluetoothRecordingInput(_ audioSession: AVAudioSession) -> Bool {
+        guard CONFIG.preferredInputUID.isEmpty == false,
+            let input = preferredRecordingInput(audioSession)
+        else {
+            return false
+        }
+        return input.portType == .bluetoothHFP
     }
 
     private func updateCurrentMicrophoneInfo() {
@@ -1208,6 +1277,8 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     private func finishInterruptionRecoveryIfRunning() -> Bool {
         guard isAudioProcessingRunning else { return false }
         logAudioProcessingState("interruption resume completed")
+        pendingStartAfterForeground = false
+        pendingInterruptionResumeAfterForeground = false
         shouldResumeAfterInterruption = false
         isSuspended = false
         interruptionResumeAttempt = 0
@@ -1355,6 +1426,15 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         }
     }
 
+    private func deferInterruptionResume(reason: String) {
+        logAudioProcessingState(reason)
+        shouldResumeAfterInterruption = true
+        isSuspended = true
+        pendingStartAfterForeground = isApplicationNotActive
+        interruptionResumeAttempt = 0
+        scheduleInterruptionResumeAttempt(delay: 3.0)
+    }
+
     private func removeStaleAudioTapAfterInterruption() {
         guard hasAudioTap else { return }
         audioEngine.inputNode.removeTap(onBus: CONFIG.onBus)
@@ -1418,6 +1498,10 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         // Defer to interruption handling when recovery is already in progress.
         guard isSensorStarted, !isSuspended, !shouldResumeAfterInterruption else { return }
 
+        if recoverStoppedAudioEngineAfterRouteChange(reason: reason) {
+            return
+        }
+
         if shouldKeepRunningAfterBackgroundRouteChange(reason: reason) {
             logAudioProcessingState(
                 "audio route changed while running in background; keeping current engine")
@@ -1427,8 +1511,11 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         switch reason {
         case .oldDeviceUnavailable:
             if newInputUID.isEmpty {
-                handleAudioProcessingError(
-                    "The microphone was disconnected and no alternative input is available.")
+                logAudioProcessingState(
+                    "input route became temporarily unavailable; restarting with preferred route")
+                stopAudioProcessing(preserveAudioSession: true)
+                isReadySessionCategory = false
+                startSensor(allowBackgroundSessionStart: true)
             } else {
                 logAudioProcessingState("input device removed; restarting with new route")
                 stopAudioProcessing(preserveAudioSession: true)
@@ -1451,6 +1538,40 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         default:
             break
         }
+    }
+
+    private func recoverStoppedAudioEngineAfterRouteChange(
+        reason: AVAudioSession.RouteChangeReason
+    ) -> Bool {
+        guard isUserRequestedRunning, isSensorStarted, hasAudioTap, !audioEngine.isRunning else {
+            return false
+        }
+
+        logAudioProcessingState(
+            "audio engine stopped during route change reason=\(reason.rawValue); attempting restart")
+
+        do {
+            let audioSession = AVAudioSession.sharedInstance()
+            try configureAudioSessionForRecording(audioSession)
+            try audioSession.setActive(true)
+            isReadySessionCategory = true
+            updateCurrentMicrophoneInfo()
+        } catch {
+            logAudioProcessingState(
+                "setActive(true) failed for route change recovery: \(error)")
+            deferInterruptionResume(
+                reason: "route change recovery deferred after session activation failure")
+            return true
+        }
+
+        if startAudioEngineFastPathAfterInterruption("route change recovery") {
+            _ = finishInterruptionRecoveryIfRunning()
+            return true
+        }
+
+        deferInterruptionResume(
+            reason: "route change recovery did not restore audio; scheduling retry")
+        return true
     }
 
     private func shouldKeepRunningAfterBackgroundRouteChange(
@@ -1525,21 +1646,15 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             guard isSuspended || shouldResumeAfterInterruption else { return }
 
             guard let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt else {
-                logAudioProcessingState(
-                    "interruption ended without resume options; deferring restart")
-                shouldResumeAfterInterruption = true
-                isSuspended = true
-                pendingStartAfterForeground = isApplicationNotActive
+                deferInterruptionResume(
+                    reason: "interruption ended without resume options; scheduling restart")
                 return
             }
 
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
             guard options.contains(.shouldResume) else {
-                logAudioProcessingState(
-                    "interruption ended without shouldResume; deferring restart")
-                shouldResumeAfterInterruption = true
-                isSuspended = true
-                pendingStartAfterForeground = isApplicationNotActive
+                deferInterruptionResume(
+                    reason: "interruption ended without shouldResume; scheduling restart")
                 return
             }
 
