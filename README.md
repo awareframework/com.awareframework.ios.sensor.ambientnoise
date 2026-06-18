@@ -19,7 +19,7 @@ iOS 15 or later
 
 4. Add `NSMicrophoneUsageDescription` to your `Info.plist`.
 
-## Public functions
+## Public Functions
 
 ### AmbientNoiseSensor
 
@@ -62,12 +62,12 @@ Class to hold the configuration of the sensor.
 + `onBus: Int`: Audio engine input bus. (default = `0`)
 + `enabled: Bool`: Sensor is enabled or not. (default = `false`)
 + `debug: Bool`: Enable/disable logging. (default = `false`)
-+ `label: String`: Label for the data. (default = "")
-+ `deviceId: String`: Id of the device associated with the events. (default = "")
-+ `dbEncryptionKey`: Encryption key for the database. (default = `nil`)
-+ `dbType: Engine`: Which db engine to use for saving data. (default = `Engine.DatabaseType.NONE`)
++ `label: String`: Label for the data. (default = `""`)
++ `deviceId: String`: Id of the device associated with the events. (default = `""`)
++ `dbEncryptionKey: String?`: Encryption key for the database. (default = `nil`)
++ `dbType: DatabaseType`: Which db engine to use for saving data. (default = `.none`)
 + `dbPath: String`: Path of the database.
-+ `dbHost: String`: Host for syncing the database. (default = `nil`)
++ `dbHost: String?`: Host for syncing the database. (default = `nil`)
 
 ### Audio classifier model policy
 
@@ -152,7 +152,7 @@ Contains a sound classification result.
 | timezone   | Int    | Timezone of the device                                          |
 | os         | String | Operating system of the device (iOS)                            |
 
-## Example usage
+## Example Usage
 
 ```swift
 import com_awareframework_ios_sensor_ambientnoise
