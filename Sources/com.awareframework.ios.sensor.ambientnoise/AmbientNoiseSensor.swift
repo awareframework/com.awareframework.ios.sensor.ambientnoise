@@ -99,42 +99,38 @@ extension AmbientNoiseSensor: SNResultsObserving {
 
     public func request(_ request: SNRequest, didProduce result: SNResult) {
         guard let result = result as? SNClassificationResult else { return }
+        let now = Date()
+        let classifications = result.classifications
+        extendDutyCycleIfNeeded(for: classifications, now: now)
+
         DispatchQueue.main.async {
-            let now = Date()
-            self.audioClasses.removeAll()
-            for c in result.classifications {
-                self.audioClasses.append(
-                    AudioClassPoint(family: c.identifier, date: now, confidence: c.confidence))
+            self.audioClasses = classifications.map {
+                AudioClassPoint(family: $0.identifier, date: now, confidence: $0.confidence)
             }
-            self.extendDutyCycleIfNeeded(for: result.classifications, now: now)
+        }
 
-            let maxKnown = self.knownClassifications?.count ?? result.classifications.count
-            let topK = self.CONFIG.storeOnlyTopK ?? maxKnown
-            let topClassifications = result.classifications
-                .sorted { $0.confidence > $1.confidence }
-                .prefix(topK)
-
-            for audioClass in topClassifications {
-                let d = AudioLabelData(
+        let maxKnown = knownClassifications?.count ?? classifications.count
+        let topK = CONFIG.storeOnlyTopK ?? maxKnown
+        let labelData = classifications
+            .sorted { $0.confidence > $1.confidence }
+            .prefix(topK)
+            .map {
+                AudioLabelData(
                     timestamp: Int64(now.timeIntervalSince1970 * 1000),
-                    audioLabel: audioClass.identifier,
-                    confidence: audioClass.confidence,
-                    label: self.CONFIG.label
+                    audioLabel: $0.identifier,
+                    confidence: $0.confidence,
+                    label: CONFIG.label
                 )
-                let value = "\(audioClass.identifier) \(audioClass.confidence)"
+            }
 
+        dataQueue.async { [weak self] in
+            guard let self else { return }
+            labelData.forEach { item in
                 if self.CONFIG.debug {
-                    print(AmbientNoiseSensor.TAG, now, value)
+                    print(AmbientNoiseSensor.TAG, now, "\(item.audioLabel) \(item.confidence)")
                 }
-
-                if let engine = self.audioLabelSubSensor?.dbEngine {
-                    engine.save([d])
-                }
-
-                if let observer = self.CONFIG.sensorObserver {
-                    observer.onAudioLabelChanged(data: d)
-                }
-
+                self.audioLabelSubSensor?.dbEngine?.save([item])
+                self.CONFIG.sensorObserver?.onAudioLabelChanged(data: item)
                 self.notificationCenter.post(name: .actionAwareAudioLabel, object: self)
             }
 
@@ -147,9 +143,7 @@ extension AmbientNoiseSensor: SNResultsObserving {
     public func request(_ request: SNRequest, didFailWithError error: Error) {
         guard isSensorStarted, !isDutyCycleResting() else { return }
         if isApplicationNotActive && !hasCustomAudioClassifier {
-            streamAnalyzer = nil
-            knownClassifications = nil
-            logAudioProcessingState(
+            clearStreamAnalyzer(
                 "suppressed audio classification model built into iOS error while app is not active: \(error.localizedDescription)"
             )
             return
@@ -199,6 +193,9 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     var streamAnalyzer: SNAudioStreamAnalyzer?
     private var streamAnalyzerFormatKey: String?
     var analysisQueue: DispatchQueue!
+    private let analysisQueueSpecificKey = DispatchSpecificKey<Void>()
+    private let dataQueue = DispatchQueue(
+        label: "com.awareframework.ios.sensor.ambientnoise.dataQueue")
 
     private var isSuspended = false
     private var isReadySessionCategory = false
@@ -406,6 +403,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
         analysisQueue = DispatchQueue(
             label: "com.awareframework.ios.sensor.ambientnoise.analysisQueue")
+        analysisQueue.setSpecific(key: analysisQueueSpecificKey, value: ())
 
         refreshCachedApplicationState()
         NotificationCenter.default.addObserver(
@@ -689,10 +687,10 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             return
         }
 
-        streamAnalyzer?.removeAllRequests()
-        streamAnalyzer = nil
-        streamAnalyzerFormatKey = nil
-        knownClassifications = nil
+        clearStreamAnalyzer(
+            "resetting audio classification analyzer before tap install",
+            synchronously: true
+        )
 
         inputNode.installTap(
             onBus: CONFIG.onBus, bufferSize: CONFIG.bufferSize, format: nil
@@ -719,27 +717,24 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                     let now = Date()
                     let dbValue = Double(db)
                     self.extendDutyCycleIfNeeded(forNoiseLevel: dbValue, now: now)
-                    DispatchQueue.main.async {
-                        let d = AmbientNoiseData(
-                            timestamp: Int64(now.timeIntervalSince1970 * 1000),
-                            db: dbValue,
-                            label: self.CONFIG.label
-                        )
-
-                        if let engine = self.ambientNoiseSubSensor?.dbEngine {
-                            engine.save([d])
-                        }
-
-                        if let observer = self.CONFIG.sensorObserver {
-                            observer.onAmbientNoiseChanged(data: d)
-                        }
+                    let d = AmbientNoiseData(
+                        timestamp: Int64(now.timeIntervalSince1970 * 1000),
+                        db: dbValue,
+                        label: self.CONFIG.label
+                    )
+                    self.dataQueue.async { [weak self] in
+                        guard let self else { return }
+                        self.ambientNoiseSubSensor?.dbEngine?.save([d])
+                        self.CONFIG.sensorObserver?.onAmbientNoiseChanged(data: d)
 
                         if self.CONFIG.debug {
                             print(AmbientNoiseSensor.TAG, now, dbValue)
                         }
 
                         self.notificationCenter.post(name: .actionAwareAmbientNoise, object: self)
+                    }
 
+                    DispatchQueue.main.async {
                         self.decibels.append(DecibelPoint(date: now, value: dbValue))
                         if self.decibels.count > 100 {
                             self.decibels.removeFirst()
@@ -771,6 +766,12 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     }
 
     private func prepareStreamAnalyzerIfNeeded(inputFormat: AVAudioFormat) {
+        guard isOnAnalysisQueue else {
+            analysisQueue.async { [weak self] in
+                self?.prepareStreamAnalyzerIfNeeded(inputFormat: inputFormat)
+            }
+            return
+        }
         guard !shouldDeferBuiltInAudioClassifierSetup() else {
             return
         }
@@ -805,21 +806,14 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         }
 
         guard CONFIG.activateAudioClassificationSensor else {
-            streamAnalyzer?.removeAllRequests()
-            streamAnalyzer = nil
-            streamAnalyzerFormatKey = nil
-            knownClassifications = nil
-            logAudioProcessingState(
+            clearStreamAnalyzer(
                 "skipped SNAudioStreamAnalyzer because audio classification is disabled attempt=\(attempt)"
             )
             return
         }
 
         do {
-            streamAnalyzer?.removeAllRequests()
-            streamAnalyzer = nil
-            streamAnalyzerFormatKey = nil
-            knownClassifications = nil
+            clearStreamAnalyzer("resetting audio classification analyzer attempt=\(attempt)")
 
             let request: SNClassifySoundRequest
             if let model = try audioClassifierModelForRequest() {
@@ -834,10 +828,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 request = try SNClassifySoundRequest(mlModel: model)
             } else if CONFIG.useBuiltInAudioClassifier {
                 guard !isApplicationNotActive else {
-                    streamAnalyzer = nil
-                    streamAnalyzerFormatKey = nil
-                    knownClassifications = nil
-                    logAudioProcessingState(
+                    clearStreamAnalyzer(
                         "deferred audio classification model built into iOS setup while app is not active attempt=\(attempt)"
                     )
                     return
@@ -853,10 +844,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
                 )
                 request = try SNClassifySoundRequest(classifierIdentifier: .version1)
             } else {
-                streamAnalyzer = nil
-                streamAnalyzerFormatKey = nil
-                knownClassifications = nil
-                logAudioProcessingState(
+                clearStreamAnalyzer(
                     "skipped SNAudioStreamAnalyzer because no audio classifier model is configured attempt=\(attempt)"
                 )
                 return
@@ -869,9 +857,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             try streamAnalyzer?.add(request, withObserver: self)
             logAudioProcessingState("added SNClassifySoundRequest attempt=\(attempt)")
         } catch {
-            streamAnalyzer?.removeAllRequests()
-            streamAnalyzer = nil
-            streamAnalyzerFormatKey = nil
+            clearStreamAnalyzer("clearing audio classification analyzer after setup error attempt=\(attempt)")
             if CONFIG.debug {
                 print(
                     AmbientNoiseSensor.TAG,
@@ -894,12 +880,9 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
 
         if CONFIG.activateAudioClassificationSensor {
             logAudioProcessingState("applying runtime audio classification configuration")
-            prepareStreamAnalyzer(inputFormat: inputFormat)
+            prepareStreamAnalyzerOnAnalysisQueue(inputFormat: inputFormat)
         } else {
-            logAudioProcessingState("removing audio classification request from runtime configuration")
-            streamAnalyzer?.removeAllRequests()
-            knownClassifications = nil
-            streamAnalyzerFormatKey = nil
+            clearStreamAnalyzer("removing audio classification request from runtime configuration")
         }
     }
 
@@ -1089,7 +1072,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         // Enabling .allowBluetooth permits HFP input/output, which can degrade media playback
         // quality on AirPods during long-running sensing.
         guard usesBluetoothRecordingInput(audioSession) else {
-            return [.mixWithOthers, .allowBluetoothA2DP]
+            return [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker]
         }
         return [.mixWithOthers, .allowBluetooth]
     }
@@ -1161,6 +1144,50 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
             return true
         }
         return CONFIG.useBuiltInAudioClassifier && !isApplicationNotActive
+    }
+
+    private var isOnAnalysisQueue: Bool {
+        DispatchQueue.getSpecific(key: analysisQueueSpecificKey) != nil
+    }
+
+    private func prepareStreamAnalyzerOnAnalysisQueue(inputFormat: AVAudioFormat) {
+        if isOnAnalysisQueue {
+            prepareStreamAnalyzer(inputFormat: inputFormat)
+        } else {
+            analysisQueue.async { [weak self] in
+                self?.prepareStreamAnalyzer(inputFormat: inputFormat)
+            }
+        }
+    }
+
+    private func clearStreamAnalyzer(_ reason: String, synchronously: Bool = false) {
+        let clear = {
+            self.streamAnalyzer?.removeAllRequests()
+            self.streamAnalyzer = nil
+            self.streamAnalyzerFormatKey = nil
+            self.knownClassifications = nil
+            self.logAudioProcessingState(reason)
+        }
+
+        if isOnAnalysisQueue {
+            clear()
+        } else if synchronously {
+            analysisQueue.sync(execute: clear)
+        } else {
+            analysisQueue.async(execute: clear)
+        }
+    }
+
+    private func clearBuiltInAudioClassifierBeforeBackgroundIfNeeded(reason: String) {
+        guard CONFIG.activateAudioClassificationSensor,
+            CONFIG.useBuiltInAudioClassifier,
+            !hasCustomAudioClassifier
+        else {
+            return
+        }
+
+        guard shouldDeferBuiltInAudioClassifierSetup() else { return }
+        clearStreamAnalyzer(reason, synchronously: true)
     }
 
     private func updateCachedApplicationState(_ state: UIApplication.State) {
@@ -1445,8 +1472,10 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
     private func rebuildAudioEngineAfterMediaServicesReset() {
         logAudioProcessingState("rebuilding audio engine after media services reset")
 
-        streamAnalyzer?.removeAllRequests()
-        streamAnalyzer = nil
+        clearStreamAnalyzer(
+            "clearing audio classification analyzer after media services reset",
+            synchronously: true
+        )
         audioAnalyzerSetupAttempt = 0
 
         if audioEngine.isRunning {
@@ -1715,18 +1744,24 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         if isSensorStarted, hasAudioTap, CONFIG.activateAudioClassificationSensor {
             let inputFormat = audioEngine.inputNode.inputFormat(forBus: CONFIG.onBus)
             logAudioProcessingState("rebuilding audio classification analyzer after foreground")
-            prepareStreamAnalyzer(inputFormat: inputFormat)
+            prepareStreamAnalyzerOnAnalysisQueue(inputFormat: inputFormat)
         }
     }
 
     @objc private func handleWillResignActive() {
         updateCachedApplicationState(.inactive)
         logAudioProcessingState("willResignActive received")
+        clearBuiltInAudioClassifierBeforeBackgroundIfNeeded(
+            reason: "clearing audio classification model built into iOS before background/inactive"
+        )
     }
 
     @objc private func handleDidEnterBackground() {
         updateCachedApplicationState(.background)
         logAudioProcessingState("didEnterBackground received")
+        clearBuiltInAudioClassifierBeforeBackgroundIfNeeded(
+            reason: "clearing audio classification model built into iOS after entering background"
+        )
     }
 
     @objc private func handleWillEnterForeground() {
