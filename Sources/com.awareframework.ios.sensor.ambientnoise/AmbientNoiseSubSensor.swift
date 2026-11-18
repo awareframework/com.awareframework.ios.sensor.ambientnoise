@@ -50,20 +50,7 @@ public class AmbientNoiseSubSensor: AwareSensor {
         CONFIG.dbTableName = AmbientNoiseData.databaseTableName
         initializeDbEngine(config: CONFIG)
 
-        let config = syncConfig ?? DbSyncConfig()
-        if let parentSyncConfig {
-            config.removeAfterSync = parentSyncConfig.removeAfterSync
-            config.batchSize = parentSyncConfig.batchSize
-            config.markAsSynced = parentSyncConfig.markAsSynced
-            config.skipSyncedData = parentSyncConfig.skipSyncedData
-            config.keepLastData = parentSyncConfig.keepLastData
-            config.deviceId = parentSyncConfig.deviceId
-            config.debugLevel = parentSyncConfig.debugLevel
-            config.progressHandler = parentSyncConfig.progressHandler
-            config.backgroundSession = parentSyncConfig.backgroundSession
-            config.compactDataFormat = parentSyncConfig.compactDataFormat
-            config.test = parentSyncConfig.test
-        }
+        let config = parentSyncConfig?.copy() ?? syncConfig ?? DbSyncConfig()
         config.serverType = CONFIG.serverType
         config.studyNumber = CONFIG.studyNumber
         config.studyKey = CONFIG.studyKey
