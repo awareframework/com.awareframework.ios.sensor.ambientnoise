@@ -1074,7 +1074,7 @@ final public class AmbientNoiseSensor: AwareSensor, ObservableObject {
         guard usesBluetoothRecordingInput(audioSession) else {
             return [.mixWithOthers, .allowBluetoothA2DP, .defaultToSpeaker]
         }
-        return [.mixWithOthers, .allowBluetooth]
+        return [.mixWithOthers, .allowBluetoothHFP]
     }
 
     private func usesBluetoothRecordingInput(_ audioSession: AVAudioSession) -> Bool {
